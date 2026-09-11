@@ -55,7 +55,8 @@ class CartonSystemApp:
                 'csn_length': '18', 'mac_length': '12', 'Carton_ID': 'CAR260900001',
                 'excel_name': '2544259S1S2.xlsx', 'label_name': 'Barcode label.lab',
                 'json_name': 'label_data.json', 'log_file': 'scan_record.log',
-                'tip_text': '請輸入或掃描資料（PANEL ID 23碼），並按 ENTER'
+                'tip_text': '請輸入或掃描資料（PANEL ID 23碼），並按 ENTER',
+                '2D_AOI_Flag': '0'
             }
             with open(config_file, 'w', encoding='utf-8') as f: self.config.write(f)
 
@@ -80,6 +81,7 @@ class CartonSystemApp:
         self.cfg_carton = self.mysql_config.get('setting', 'MySQL_Carton', fallback='1')
         self.cfg_c_serial = self.mysql_config.get('setting', 'MySQL_Carton_Serial', fallback='1')
         self.last_panel_id = self.config.get('settings', 'last_panel_id', fallback='')
+        self.cfg_2d_aoi_flag = self.config.get('settings', '2D_AOI_Flag', fallback='0')
         
     def create_widgets(self):
         """建立 GUI 介面，允許手動輸入修改"""
@@ -380,7 +382,9 @@ class CartonSystemApp:
             print(f"無法讀取 label_data.json: {error}")
 
     def verify_database(self, isn):
-        """以 iSN 驗證 CARD 各站狀態，並回傳各站最新 StopTime。"""
+        """以 iSN 驗證 CARD 各站狀態，並回傳各站最新 StopTime。
+        根據 config.ini 中的 2D_AOI_Flag 決定是否檢驗 AOI_B_B 和 AOI_B_T。
+        """
         try:
             pymysql = importlib.import_module("pymysql")
             # 讀取資料庫連線參數
@@ -417,7 +421,14 @@ class CartonSystemApp:
             
             cursor.close()
             conn.close()
-            station_names = ("SPI_T", "SPI_B", "AOI_T", "AOI_B", "AOI_B_B", "AOI_B_T")
+            
+            # 根據 2D_AOI_Flag 決定要檢驗的站別
+            is_2d_aoi_enabled = self.cfg_2d_aoi_flag == '1'
+            if is_2d_aoi_enabled:
+                station_names = ("SPI_T", "SPI_B", "AOI_T", "AOI_B", "AOI_B_B", "AOI_B_T")
+            else:
+                station_names = ("SPI_T", "SPI_B", "AOI_T", "AOI_B")
+            
             if not result:
                 self.log_message(f"❌ iSN [{isn}] 未找到 CARD 資料或尚未寫入站別資料", "red")
                 return None
@@ -581,4 +592,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = CartonSystemApp(root)
     root.mainloop()
-
