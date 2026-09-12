@@ -296,7 +296,11 @@ class CartonSystemApp:
                 for station_name in ("SPI_T", "SPI_B", "AOI_T", "AOI_B", "AOI_B_B", "AOI_B_T"):
                     worksheet.cell(row=row_number, column=runtime_columns[station_name]).value = station_data[station_name]
                     stop_time = station_data[f"{station_name}_StopTime"]
-                    worksheet.cell(row=row_number, column=runtime_columns[f"{station_name}_StopTime"]).value = stop_time.strftime("%Y-%m-%d %H:%M:%S")
+                    # FIX: Handle None StopTime values
+                    if stop_time is not None:
+                        worksheet.cell(row=row_number, column=runtime_columns[f"{station_name}_StopTime"]).value = stop_time.strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        worksheet.cell(row=row_number, column=runtime_columns[f"{station_name}_StopTime"]).value = ""
 
                 row_wo = str(row[0].value or '').strip()
                 self.work_order_set.add(row_wo)
