@@ -1,0 +1,3 @@
+將要依據的檔案放到Source_LOG內
+
+將要修改的檔案放到Modify_LOG內
