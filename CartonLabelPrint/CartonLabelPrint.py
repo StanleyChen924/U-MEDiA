@@ -16,7 +16,7 @@ class CartonSystemApp:
         self.root = root
         self.root.title("Carton Label 掃描控制系統")
         self.root.tk.call("tk", "scaling", 1.3)
-        self.root.geometry("780x585")
+        self.root.geometry("780x650")
         self.app_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
         parent_dir = os.path.dirname(self.app_dir)
         if getattr(sys, "frozen", False) and not os.path.exists(os.path.join(self.app_dir, "2544259S1S2.xlsx")) and os.path.exists(os.path.join(parent_dir, "2544259S1S2.xlsx")):
@@ -37,6 +37,7 @@ class CartonSystemApp:
         self.s2_isn_list = []
         self.work_order_set = set()
         self.carton_scanned_count = 0
+        self.first_panel_id_of_carton = None  # 記錄該箱的第一個 panel_id
         self.load_label_data()
         
         # 建立 UI 畫面
@@ -122,6 +123,17 @@ class CartonSystemApp:
         
         self.txt_log = tk.Text(frame_status, height=10, state="disabled")
         self.txt_log.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # 按鈕區域
+        frame_buttons = tk.Frame(self.root)
+        frame_buttons.pack(fill="x", **padding)
+        
+        self.btn_print = tk.Button(frame_buttons, text="列印", command=self.manual_trigger_print, bg="green", fg="white", font=("Arial", 12, "bold"))
+        self.btn_print.pack(side="left", padx=5, pady=5)
+        
+        self.btn_reset = tk.Button(frame_buttons, text="清空計數", command=self.manual_reset_count, bg="orange", fg="white", font=("Arial", 12, "bold"))
+        self.btn_reset.pack(side="left", padx=5, pady=5)
+        
         self.root.after_idle(self.entry_barcode.focus_set)
         
     def write_system_log(self, message):
@@ -172,6 +184,10 @@ class CartonSystemApp:
             self.config.write(config_file)
         
         self.log_message(f"讀取到 Panel ID: {panel_id}")
+        
+        # 記錄該箱的第一個 panel_id
+        if self.first_panel_id_of_carton is None:
+            self.first_panel_id_of_carton = panel_id
         
         # 讀取畫面上最新修改的數值
         pn = self.entries["P/N:"].get().strip()
@@ -368,7 +384,7 @@ class CartonSystemApp:
                 ]
             elif len(self.work_order_set) == 1:
                 self.s1_isn_list = [
-                    isn for key in ('QRCode1', 'QRCode2', 'QRCode3', 'QRCode4')
+                    isn for key in ('QRCode1', 'QRCode5', 'QRCode3', 'QRCode4')
                     for isn in str(data.get(key, '')).split(',') if isn.strip()
                 ]
                 self.s2_isn_list = []
@@ -378,7 +394,7 @@ class CartonSystemApp:
                     for isn in str(data.get(key, '')).split(',') if isn.strip()
                 ]
                 self.s2_isn_list = [
-                    isn for key in ('QRCode2', 'QRCode4')
+                    isn for key in ('QRCode5', 'QRCode4')
                     for isn in str(data.get(key, '')).split(',') if isn.strip()
                 ]
             self.carton_scanned_count = len(self.s1_isn_list) + len(self.s2_isn_list)
@@ -491,11 +507,11 @@ class CartonSystemApp:
             "LOT WO": lot,
             "QTY": str(qty),
             "QRCode1": qr1_str,
-            "QRCode2": qr2_str,
+            "QRCode5": qr2_str,
             "QRCode3": qr3_str,
-            "QRCode4": qr4_str,
-            "WorkOrders": sorted(self.work_order_set)
+            "QRCode4": qr4_str
             }
+        """
         if has_both_sides:
             data.update({
                 "S1QRCode1": ",".join(self.s1_isn_list[:40]),
@@ -507,9 +523,88 @@ class CartonSystemApp:
                 "S2QRCode3": ",".join(self.s2_isn_list[80:120]),
                 "S2QRCode4": ",".join(self.s2_isn_list[120:160]),
             })
-        
+        """
         with open(json_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def save_json_to_archive(self, pn, lot, qty, carton):
+        """將 JSON 資料備份到 JSON 資料夾，以 panel_id_carton 命名"""
+        json_folder = os.path.join(self.app_dir, "JSON")
+        os.makedirs(json_folder, exist_ok=True)
+        
+        # 使用第一個 panel_id 和箱號命名
+        # archive_filename = f"{self.first_panel_id_of_carton}_{carton}.json"
+        archive_filename = f"label_data_{self.first_panel_id_of_carton}_{carton}.json"
+        archive_filepath = os.path.join(json_folder, archive_filename)
+        
+        has_both_sides = bool(self.s1_isn_list and self.s2_isn_list)
+        # 單一工單且只有一側時維持舊格式；S1/S2 成對資料固定分組。
+        if len(self.work_order_set) == 1 and not has_both_sides:
+            isn_list = self.s1_isn_list + self.s2_isn_list
+            qr1_str = ",".join(isn_list[:40])
+            qr2_str = ",".join(isn_list[40:80])
+            qr3_str = ",".join(isn_list[80:120])
+            qr4_str = ",".join(isn_list[120:160])
+        else:
+            qr1_str = ",".join(self.s1_isn_list[:40])
+            qr2_str = ",".join(self.s2_isn_list[:40])
+            qr3_str = ",".join(self.s1_isn_list[40:80])
+            qr4_str = ",".join(self.s2_isn_list[40:80])
+
+        data = {
+            "PN": pn,
+            "DateCode": self.entries["D/C:"].get().strip(),
+            "LOT WO": lot,
+            "QTY": str(qty),
+            "Carton": str(carton),
+            "QRCode1": qr1_str,
+            "QRCode2": qr2_str,
+            "QRCode3": qr3_str,
+            "QRCode4": qr4_str
+        }
+        """
+        if has_both_sides:
+            data.update({
+                "S1QRCode1": ",".join(self.s1_isn_list[:40]),
+                "S1QRCode2": ",".join(self.s1_isn_list[40:80]),
+                "S1QRCode3": ",".join(self.s1_isn_list[80:120]),
+                "S1QRCode4": ",".join(self.s1_isn_list[120:160]),
+                "S2QRCode1": ",".join(self.s2_isn_list[:40]),
+                "S2QRCode2": ",".join(self.s2_isn_list[40:80]),
+                "S2QRCode3": ",".join(self.s2_isn_list[80:120]),
+                "S2QRCode4": ",".join(self.s2_isn_list[120:160]),
+            })
+        """
+        
+        try:
+            with open(archive_filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            self.log_message(f"✅ JSON 備份已存至: {archive_filename}")
+        except OSError as e:
+            self.log_message(f"❌ JSON 備份失敗: {e}", "red")
+
+    def manual_trigger_print(self):
+        """手動點擊列印按鈕"""
+        if self.carton_scanned_count == 0:
+            messagebox.showwarning("警告", "目前箱內無掃描資料，無法列印")
+            return
+        
+        pn = self.entries["P/N:"].get().strip()
+        lot = self.entries["LOT(WO#):"].get().strip()
+        qty = self.entries["Q'ty:"].get().strip()
+        carton = self.entries["MySQL_Carton:"].get().strip()
+        
+        # 先保存 JSON 備份
+        self.save_json_to_archive(pn, lot, qty, carton)
+        
+        self.trigger_print()
+
+    def manual_reset_count(self):
+        """手動點擊清空計數按鈕"""
+        self.reset_label_progress()
+        self.first_panel_id_of_carton = None
+        messagebox.showinfo("清空完成", "目前箱內計數已清空")
+
         
     def trigger_print(self):
         """執行列印並確認已成功送入印表機佇列。"""
@@ -550,6 +645,7 @@ class CartonSystemApp:
                 self.s2_isn_list.clear()
                 self.work_order_set.clear()
                 self.carton_scanned_count = 0
+                self.first_panel_id_of_carton = None
                 self.clear_label_data()
             except subprocess.TimeoutExpired:
                 self.play_sound("buzz.wav")
@@ -571,9 +667,7 @@ class CartonSystemApp:
             with open(json_file, 'r', encoding='utf-8') as data_file:
                 data = json.load(data_file)
             for key in (
-                'QRCode1', 'QRCode2', 'QRCode3', 'QRCode4',
-                'S1QRCode1', 'S1QRCode2', 'S1QRCode3', 'S1QRCode4',
-                'S2QRCode1', 'S2QRCode2', 'S2QRCode3', 'S2QRCode4',
+                'QRCode1', 'QRCode5', 'QRCode3', 'QRCode4',
             ):
                 data[key] = ''
             data['WorkOrders'] = []
