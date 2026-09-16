@@ -130,9 +130,10 @@ class CartonSystemApp:
         
         self.btn_print = tk.Button(frame_buttons, text="列印", command=self.manual_trigger_print, bg="green", fg="white", font=("Arial", 12, "bold"))
         self.btn_print.pack(side="left", padx=5, pady=5)
-        
+        """
         self.btn_reset = tk.Button(frame_buttons, text="清空計數", command=self.manual_reset_count, bg="orange", fg="white", font=("Arial", 12, "bold"))
         self.btn_reset.pack(side="left", padx=5, pady=5)
+        """
         
         self.root.after_idle(self.entry_barcode.focus_set)
         
@@ -344,13 +345,19 @@ class CartonSystemApp:
             messagebox.showerror("系統錯誤", f"處理過程中發生錯誤: {str(e)}")
 
     def save_runtime_settings(self):
-        """保存目前畫面上的數量、箱號與流水號，供下次啟動載入。"""
+        """保存目前畫面上的數量、箱號、流水號、PN 和 LOT，供下次啟動載入。"""
         for entry_name, config_name in (
+            ("P/N:", "MySQL_PN"),
+            ("LOT(WO#):", "MySQL_LOT"),
             ("Q'ty:", "MySQL_QTY"),
             ("MySQL_Carton:", "MySQL_Carton"),
             ("MySQL_Carton_Serial:", "MySQL_Carton_Serial"),
         ):
             self.mysql_config.set("setting", config_name, self.entries[entry_name].get().strip())
+        
+        # 額外保存 LOT 到 mysql_job (根據需求)
+        self.mysql_config.set("setting", "mysql_job", self.entries["LOT(WO#):"].get().strip())
+        
         with open(os.path.join(self.app_dir, "MySQLConfig.ini"), "w", encoding="utf-8") as config_file:
             self.mysql_config.write(config_file)
         self.config.set('settings', 'last_panel_id', self.last_panel_id)
