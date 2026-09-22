@@ -149,8 +149,6 @@ class CartonSystemApp:
         qty = int(self.entries["Q'ty:"].get().strip())
         carton = self.entries["MySQL_Carton:"].get().strip()
         c_serial = int(self.entries["MySQL_Carton_Serial:"].get().strip())
-        # 新箱的第一片（流水號回到 1）才清除上一箱的暫存 JSON。
-        # 列印成功後不清除 JSON，讓列印完成的資料可保留；下一箱第一片在此清除。
         if c_serial == 1 and self.carton_scanned_count == 0:
             self.reset_label_progress()
         if self.first_panel_id_of_carton is None:
@@ -289,7 +287,7 @@ class CartonSystemApp:
 
     def _qr_data(self, pn, lot, qty, carton=None):
         values = self.s1_isn_list + self.s2_isn_list
-        data = {"PN": pn, "DateCode": self.entries["D/C:"].get().strip(), "LOT WO": lot, "QTY": str(qty), "QRCode1": ",".join(values[:40]), "QRCode5": ",".join(values[40:80]), "QRCode3": ",".join(values[80:120]), "QRCode4": ",".join(values[120:160]), "WorkOrders": list(self.work_order_set)}
+        data = {"PN": pn, "DateCode": self.entries["D/C:"].get().strip(), "LOT WO": lot, "QTY": str(qty), "QRCode1": ",".join(values[:40]), "QRCode5": ",".join(values[40:80]), "QRCode3": ",".join(values[80:120]), "QRCode4": ",".join(values[120:160])}
         if carton is not None:
             data["Carton"] = str(carton)
         return data
@@ -341,7 +339,6 @@ class CartonSystemApp:
             self.s1_isn_list.clear(); self.s2_isn_list.clear(); self.work_order_set.clear()
             self.carton_scanned_count = 0
             self.first_panel_id_of_carton = None
-            # 不在列印成功後清除 label_data.json；下一箱第一片掃描時才由 process_barcode 清除。
         except subprocess.TimeoutExpired:
             self.play_sound("buzz.wav")
             self.log_message("❌ FAIL：列印程序逾時，維持目前箱號與流水號", "red")
@@ -357,7 +354,7 @@ class CartonSystemApp:
                 data = json.load(f)
             for key in ("QRCode1", "QRCode5", "QRCode3", "QRCode4"):
                 data[key] = ""
-            data["WorkOrders"] = []
+            data.pop("WorkOrders", None)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except (OSError, json.JSONDecodeError) as e:
