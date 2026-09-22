@@ -16,44 +16,47 @@ import pandas as pd
 # 環境路徑與設定檔
 # ==============================================================================
 INI_FILENAME = 'MySQLConfig.ini'
-config_file_path = 'config.ini'
+CONFIG_FILENAME = 'config.ini'
+_NOW = datetime.now().strftime('%Y%m%d')
 
-config = configparser.ConfigParser()
-if os.path.exists(config_file_path):
-    config.read(config_file_path, encoding='utf-8')
+path_config = configparser.ConfigParser()
+if os.path.exists(CONFIG_FILENAME):
+    path_config.read(CONFIG_FILENAME, encoding='utf-8')
 else:
-    config['PATH'] = {
+    path_config['PATH'] = {
         'SCAN_DIR': './ScanFolder',
         'BACKUP_DIR': './BackupFolder',
         'FAIL_DIR': './FailFolder',
-        'LOG_FILENAME': f"./LOG/system_log{datetime.now().strftime('%Y%m%d')}.txt",
-        'FAIL_LOG_FILENAME': f"./LOG/FIAL_system_log{datetime.now().strftime('%Y%m%d')}.txt",
+        'LOG_FILENAME': f'./LOG/system_log{_NOW}.txt',
+        'FAIL_LOG_FILENAME': f'./LOG/Fail_system_log{_NOW}.txt',
     }
-    with open(config_file_path, 'w', encoding='utf-8') as configfile:
-        config.write(configfile)
+    with open(CONFIG_FILENAME, 'w', encoding='utf-8') as config_file:
+        path_config.write(config_file)
 
-PATH_CONFIG = config['PATH']
-SCAN_DIR = PATH_CONFIG.get('SCAN_DIR', './ScanFolder').strip()
-BACKUP_DIR = PATH_CONFIG.get('BACKUP_DIR', './BackupFolder').strip()
-FAIL_DIR = PATH_CONFIG.get('FAIL_DIR', './FailFolder').strip()
-LOG_FILENAME = PATH_CONFIG.get(
-    'LOG_FILENAME',
-    f"./LOG/system_log{datetime.now().strftime('%Y%m%d')}.txt",
-).strip()
-FAIL_LOG_FILENAME = PATH_CONFIG.get(
-    'FAIL_LOG_FILENAME',
-    f"./LOG/FIAL_system_log{datetime.now().strftime('%Y%m%d')}.txt",
+paths = path_config['PATH']
+SCAN_DIR = paths.get('SCAN_DIR', './ScanFolder').strip()
+BACKUP_DIR = paths.get('BACKUP_DIR', './BackupFolder').strip()
+FAIL_DIR = paths.get('FAIL_DIR', './FailFolder').strip()
+LOG_FILENAME = paths.get('LOG_FILENAME', f'./LOG/system_log{_NOW}.txt').strip()
+FAIL_LOG_FILENAME = paths.get(
+    'FAIL_LOG_FILENAME', f'./LOG/Fail_system_log{_NOW}.txt'
 ).strip()
 
-for directory in (SCAN_DIR, BACKUP_DIR, FAIL_DIR, os.path.dirname(LOG_FILENAME), os.path.dirname(FAIL_LOG_FILENAME)):
+for directory in (
+    SCAN_DIR,
+    BACKUP_DIR,
+    FAIL_DIR,
+    os.path.dirname(LOG_FILENAME),
+    os.path.dirname(FAIL_LOG_FILENAME),
+):
     if directory:
         os.makedirs(directory, exist_ok=True)
 
 monitor_text_area = None
 
 if not os.path.exists(INI_FILENAME):
-    with open(INI_FILENAME, 'w', encoding='utf-8') as f:
-        f.write("""[SystemID]
+    with open(INI_FILENAME, 'w', encoding='utf-8') as config_file:
+        config_file.write('''[SystemID]
 Device_ID=0x0013
 Vendor_ID=0x168C
 SSYS_ID=0x2051
@@ -74,7 +77,7 @@ MySQL_ModelName=BIW-LA00
 MySQL_Operator=U93039
 MySQL_Station=1006-1001
 MySQL_CPNumber=4-3-1
-""")
+''')
 
 
 # ==============================================================================
@@ -92,15 +95,16 @@ def load_config():
 
 
 def save_config(config_data, job, model, operator, station):
+    del config_data  # 保留既有函式介面
+    targets = {
+        'MySQL_Job': job,
+        'MySQL_ModelName': model,
+        'MySQL_Operator': operator,
+        'MySQL_Station': station,
+    }
     try:
-        with open(INI_FILENAME, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        targets = {
-            'MySQL_Job': job,
-            'MySQL_ModelName': model,
-            'MySQL_Operator': operator,
-            'MySQL_Station': station,
-        }
+        with open(INI_FILENAME, 'r', encoding='utf-8') as config_file:
+            lines = config_file.readlines()
         new_lines = []
         for line in lines:
             stripped = line.strip()
@@ -108,9 +112,9 @@ def save_config(config_data, job, model, operator, station):
                 new_lines.append(line)
                 continue
             key = stripped.split('=', 1)[0].strip()
-            new_lines.append(f"{key}={targets[key]}\n" if key in targets else line)
-        with open(INI_FILENAME, 'w', encoding='utf-8') as f:
-            f.writelines(new_lines)
+            new_lines.append(f'{key}={targets[key]}\n' if key in targets else line)
+        with open(INI_FILENAME, 'w', encoding='utf-8') as config_file:
+            config_file.writelines(new_lines)
         return True
     except Exception as error:
         messagebox.showerror('錯誤', f'存檔失敗：{error}')
@@ -132,12 +136,12 @@ def _write_log(path, message):
         with open(path, 'a', encoding='utf-8') as log_file:
             log_file.write(message + '\n')
     except Exception as error:
-        print(f'寫入日誌檔失敗: {error}')
+        print(f'寫入日誌檔失敗 [{path}]: {error}')
 
 
 def log_and_display(message, failure=False):
-    """一般事件寫入 system_log；失敗事件寫入 FIAL_system_log。"""
-    full_message = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+    """一般事件寫入 system_log，失敗事件只寫入獨立 Fail_system_log。"""
+    full_message = f'[{datetime.now():%Y-%m-%d %H:%M:%S}] {message}'
     _write_log(FAIL_LOG_FILENAME if failure else LOG_FILENAME, full_message)
     if monitor_text_area is not None:
         try:
@@ -148,28 +152,32 @@ def log_and_display(message, failure=False):
 
 
 def move_to_fail_folder(file_name, reason):
-    """將失敗檔案搬到 FailFolder，並將搬移結果記錄到 FIAL log。"""
+    """將失敗檔案移到 FailFolder，並把結果寫入 Fail_system_log。"""
     os.makedirs(FAIL_DIR, exist_ok=True)
     source = os.path.join(SCAN_DIR, file_name)
     destination = os.path.join(FAIL_DIR, file_name)
-    if os.path.exists(destination):
-        base, extension = os.path.splitext(file_name)
-        destination = os.path.join(
-            FAIL_DIR,
-            f'{base}_{datetime.now().strftime("%H%M%S")}{extension}',
-        )
     try:
-        if os.path.exists(source):
-            shutil.move(source, destination)
+        if not os.path.isfile(source):
+            log_and_display(
+                f'[失敗轉移失敗][檔案={file_name}][原因={reason}]'
+                f'[找不到來源檔案={source}]', failure=True,
+            )
+            return False
+        if os.path.exists(destination):
+            base, extension = os.path.splitext(file_name)
+            destination = os.path.join(
+                FAIL_DIR, f'{base}_{datetime.now():%H%M%S_%f}{extension}'
+            )
+        shutil.move(source, destination)
         log_and_display(
-            f'[失敗轉移][檔案={file_name}][原因={reason}][目錄={FAIL_DIR}]',
-            failure=True,
+            f'[失敗轉移成功][檔案={file_name}][原因={reason}]'
+            f'[目錄={destination}]', failure=True,
         )
         return True
     except Exception as error:
         log_and_display(
-            f'[失敗轉移失敗][檔案={file_name}][原因={reason}][錯誤={error}]',
-            failure=True,
+            f'[失敗轉移失敗][檔案={file_name}][原因={reason}]'
+            f'[錯誤={error}]', failure=True,
         )
         return False
 
@@ -235,7 +243,9 @@ def load_all_excel_files():
                 continue
             filtered = df.reindex(columns=output_columns).copy()
             for column in output_columns:
-                filtered[column] = filtered[column].apply(lambda value: value.strip() if isinstance(value, str) else value)
+                filtered[column] = filtered[column].apply(
+                    lambda value: value.strip() if isinstance(value, str) else value
+                )
             filtered['來源檔案'] = filename
             data_frames.append(filtered)
         except Exception as error:
@@ -247,9 +257,7 @@ def find_sn_by_panel_df(target_panel, buffer, bsn):
     if buffer is None or buffer.empty or 'PANEL_NO' not in buffer.columns:
         return pd.DataFrame()
     target = str(target_panel).strip().upper()
-    result = buffer[buffer['PANEL_NO'].astype(str).str.strip().str.upper() == target].copy()
-    if result.empty:
-        return pd.DataFrame()
+    result = buffer[buffer['PANEL_NO'].astype(str).str.strip().str.upper() == target]
     rows = []
     for _, row in result.iterrows():
         value = row.get('序號(S1SN)', row.get('序號(SN)', ''))
@@ -276,7 +284,7 @@ def upload_to_mysql(sn_param, file_datetime, side, status, cfg, mysql_job, panel
     try:
         mysql_type = mysql_safe_identifier(cfg['setting'].get('MySQL_TYPE', 'CARD'), 'MySQL_TYPE')
         base_table = mysql_safe_identifier(cfg['setting'].get('TableDetailStr', 'STA1'), 'TableDetailStr')
-        detail_table = f'{base_table}_{"B" if side == "B" else "T"}'
+        detail_table = f'{base_table}_B' if side == 'B' else f'{base_table}_T'
     except ValueError as error:
         log_and_display(f'MySQL 表名設定錯誤: {error}', failure=True)
         return False
@@ -284,12 +292,8 @@ def upload_to_mysql(sn_param, file_datetime, side, status, cfg, mysql_job, panel
     for attempt in range(1, 4):
         conn = None
         try:
-            log_and_display(
-                f'[重送上傳][SN={sn_param}][PANEL={panel_no}][Job={mysql_job}]'
-                f'[DB寫入][第{attempt}/3次]' if attempt == 1 else
-                f'[重送上傳][SN={sn_param}][PANEL={panel_no}][Job={mysql_job}]'
-                f'[DB寫入][重試第{attempt}/3次]',
-            )
+            log_and_display(f'[重送上傳][SN={sn_param}][PANEL={panel_no}]'
+                            f'[DB寫入][第{attempt}/3次]')
             conn = pymysql.connect(
                 host=cfg['setting'].get('MySQL_ServerIP'),
                 user=cfg['setting'].get('MySQL_username'),
@@ -327,27 +331,20 @@ def upload_to_mysql(sn_param, file_datetime, side, status, cfg, mysql_job, panel
             if main_ok and detail_ok:
                 log_and_display(f'[二次確認成功][SN={sn_param}][PANEL={panel_no}]')
                 return True
-            log_and_display(
-                f'[二次確認失敗][SN={sn_param}][PANEL={panel_no}]'
-                f'[主表={main_ok}][明細表={detail_ok}]', failure=True,
-            )
+            log_and_display(f'[二次確認失敗][SN={sn_param}][PANEL={panel_no}]'
+                            f'[主表={main_ok}][明細表={detail_ok}]', failure=True)
             return False
         except Exception as error:
-            log_and_display(
-                f'[重送上傳][SN={sn_param}][DB寫入][失敗][第{attempt}/3次][錯誤={error}]',
-                failure=True,
-            )
+            log_and_display(f'[DB寫入失敗][SN={sn_param}][第{attempt}/3次][錯誤={error}]', failure=True)
             if attempt < 3:
                 time.sleep(2)
-            else:
-                log_and_display(f'[重試上限達成][SN={sn_param}]', failure=True)
-                return False
         finally:
             if conn is not None:
                 try:
                     conn.close()
                 except Exception:
                     pass
+    log_and_display(f'[重試上限達成][SN={sn_param}]', failure=True)
     return False
 
 
@@ -355,17 +352,15 @@ def scan_folder_loop():
     while True:
         try:
             current_cfg = load_config()
-            files = [name for name in os.listdir(SCAN_DIR) if os.path.isfile(os.path.join(SCAN_DIR, name))]
-            if files:
-                log_and_display(f'偵測到 {len(files)} 個新檔案，開始比對並上拋...')
+            files = [name for name in os.listdir(SCAN_DIR)
+                     if os.path.isfile(os.path.join(SCAN_DIR, name))]
             for file_name in files:
                 file_path = os.path.join(SCAN_DIR, file_name)
+                file_succeeded = False
                 try:
                     parts = file_name.split('_')
-                    if len(parts) < 5:
-                        log_and_display(f'⚠️ 檔案 [{file_name}] 名稱格式不符，跳過處理。', failure=True)
-                        move_to_fail_folder(file_name, '檔名格式不符')
-                        continue
+                    if len(parts) < 6:
+                        raise ValueError('檔名格式不符')
                     panel_no, status, bsn = parts[2].strip(), parts[3], parts[4]
                     model_name = parts[5][:-1]
                     side = parts[-2][-1]
@@ -379,34 +374,37 @@ def scan_folder_loop():
                             file_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                             log_and_display(f'⚠️ 檔案 [{file_name}] 時間格式錯誤。', failure=True)
                     if status.upper() == 'FAIL':
-                        log_and_display(f'ℹ️ 檔案 [{file_name}] 狀態為 FAIL，跳過上拋資料庫。', failure=True)
+                        log_and_display(f'檔案 [{file_name}] 狀態為 FAIL，跳過上拋。', failure=True)
                         move_to_fail_folder(file_name, '狀態為 FAIL')
                         continue
                     results = find_sn_by_panel_df(panel_no, data_buffer, bsn)
                     if results.empty:
-                        log_and_display(f'⚠️ PANEL_NO [{panel_no}] 比對失敗。', failure=True)
+                        log_and_display(f'PANEL_NO [{panel_no}] 比對失敗。', failure=True)
                         move_to_fail_folder(file_name, 'PANEL_NO 比對失敗')
                         continue
-                    log_and_display(f'PANEL_NO [{panel_no}] 比對成功，找到 {len(results)} 筆 SN 資料，開始逐筆上拋...')
-                    upload_results = []
-                    for _, row in results.iterrows():
-                        actual_sn = str(row['序號(SN)']).strip()
-                        upload_results.append(upload_to_mysql(actual_sn, file_dt, side, status, current_cfg, parts[1], panel_no, file_name, model_name))
-                    if not all(upload_results):
+                    upload_results = [
+                        upload_to_mysql(str(row['序號(SN)']).strip(), file_dt, side, status,
+                                        current_cfg, parts[1], panel_no, file_name, model_name)
+                        for _, row in results.iterrows()
+                    ]
+                    if not upload_results or not all(upload_results):
                         log_and_display(f'檔案 [{file_name}] 上拋失敗，移至 FailFolder。', failure=True)
                         move_to_fail_folder(file_name, '一筆或多筆 SN 上拋失敗')
                         continue
-                    log_and_display(f'PANEL [{panel_no}] 全部 SN 上拋並二次確認成功。')
+                    file_succeeded = True
+                    log_and_display(f'檔案 [{file_name}] 全部 SN 上拋並二次確認成功。')
                 except Exception as error:
                     log_and_display(f'⚠️ 處理個別檔案 {file_name} 時發生異常: {error}', failure=True)
                     move_to_fail_folder(file_name, f'處理異常: {error}')
-                    continue
-                if os.path.exists(file_path):
+                if file_succeeded and os.path.exists(file_path):
                     destination = os.path.join(BACKUP_DIR, file_name)
                     if os.path.exists(destination):
                         base, extension = os.path.splitext(file_name)
-                        destination = os.path.join(BACKUP_DIR, f'{base}_{datetime.now().strftime("%H%M%S")}{extension}')
-                    shutil.move(file_path, destination)
+                        destination = os.path.join(BACKUP_DIR, f'{base}_{datetime.now():%H%M%S_%f}{extension}')
+                    try:
+                        shutil.move(file_path, destination)
+                    except Exception as error:
+                        log_and_display(f'成功檔案搬移至 BackupFolder 失敗: {error}', failure=True)
         except Exception as error:
             log_and_display(f'⚠️ 掃描迴圈發生嚴重錯誤: {error}', failure=True)
         time.sleep(30)
@@ -428,7 +426,6 @@ def open_monitor_ui():
 
 
 def create_setup_ui():
-    global data_buffer
     config_data = load_config()
     setting = config_data['setting'] if 'setting' in config_data else {}
     root = tk.Tk()
