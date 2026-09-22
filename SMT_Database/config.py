@@ -71,7 +71,7 @@ monitor_text_area = None
 
 if not os.path.exists(INI_FILENAME):
     with open(INI_FILENAME, 'w', encoding='utf-8') as stream:
-        stream.write('''[SystemID]\nDevice_ID=0x0013\nVendor_ID=0x168C\nSSYS_ID=0x2051\nSSYS_VEND_ID=0x168C\n\n[setting]\nMySQL_FLAG=1\nMySQL_InsertFlag=1\nMySQL_BeforStation=and STA1 > 100\nTableDetailStr=STA1\nMySQL_ServerIP=10.4.5.13\nMySQL_username=U94003\nMySQL_Password=U94003\nMySQL_DB=LITEON\nMySQL_TYPE=CARD\nMySQL_Job=PUA00K5\nMySQL_ModelName=BIW-LA00\nMySQL_Operator=U93039\nMySQL_Station=1006-1001\nMySQL_CPNumber=4-3-1\n''')
+        stream.write('''[SystemID]\nDevice_ID=0x0013\nVendor_ID=0x168C\nSSYS_ID=0x2051\nSSYS_VEND_ID=0x168C\n\n[setting]\nMySQL_FLAG=1\nMySQL_InsertFlag=1\nMySQL_BeforStation=and STA1 > 100\nTableDetailStr=STA1\nMySQL_TYPE=CARD\n''')
 
 
 def load_config():
@@ -166,7 +166,7 @@ def normalize_column_name(value):
 def align_dataframe_columns(df):
     df = df.copy()
     df.columns = [str(column).strip() for column in df.columns]
-    aliases = {'工单号':'工單號','工單號':'工單號','工单':'工單號','工號':'工單號','workorder':'工單號','orderno':'工單號','job':'工單號','panelno':'PANEL_NO','panel':'PANEL_NO','panelnumber':'PANEL_NO','panelnum':'PANEL_NO','panel_no':'PANEL_NO','pnl':'PANEL_NO','併板主pnl':'併板主PNL','主pnl':'併板主PNL','pnlmain':'併板主PNL','序號':'序號(SN)','序號sn':'序號(SN)','sn':'序號(SN)','s/n':'序號(SN)','serialnumber':'序號(SN)','序號s1sn':'序號(S1SN)','s1sn':'序號(S1SN)','序號s2sn':'序號(S2SN)','s2sn':'序號(S2SN)'}
+    aliases = {'工单号':'工單號','工單號':'工單號','工单':'工單號','工號':'工單號','workorder':'工單號','orderno':'工單號','job':'工單號','panelno':'PANEL_NO','panel':'PANEL_NO','序號(SN)':'序號(SN)','併板主PNL':'併板主PNL','序號(S1SN)':'序號(S1SN)','序號(S2SN)':'序號(S2SN)'}
     aliases = {normalize_column_name(k): v for k, v in aliases.items()}
     rename = {}
     for column in df.columns:
@@ -181,11 +181,21 @@ def align_dataframe_columns(df):
 
 def load_all_excel_files():
     columns = ['工單號', 'PANEL_NO', '序號(SN)', '併板主PNL', '序號(S1SN)', '序號(S2SN)']
+    two_column_panel_sources = {'序號(SN)', '併板主PNL', '序號(S1SN)', '序號(S2SN)'}
     frames = []
     for path in glob.glob(os.path.join(BASE_DIR, '*.xlsx')):
         name = os.path.basename(path)
         try:
             df = align_dataframe_columns(pd.read_excel(path, dtype={'PANEL_NO': str}))
+            # Some Excel files contain exactly two columns and omit PANEL_NO.
+            # In that format, the second column is the PANEL_NO lookup column,
+            # regardless of whether it is named SN, PNL, S1SN, or S2SN.
+            if (
+                'PANEL_NO' not in df
+                and len(df.columns) == 2
+                and df.columns[1] in two_column_panel_sources
+            ):
+                df['PANEL_NO'] = df.iloc[:, 1]
             if 'PANEL_NO' not in df and '併板主PNL' in df: df['PANEL_NO'] = df['併板主PNL']
             if '併板主PNL' not in df and 'PANEL_NO' in df: df['併板主PNL'] = df['PANEL_NO']
             if '序號(SN)' not in df:
@@ -237,13 +247,13 @@ def upload_to_mysql(sn, file_dt, side, status, cfg, job, panel, file_name, model
         conn = None
         try:
             import pymysql
-            conn = pymysql.connect(host=cfg['setting'].get('MySQL_ServerIP'), user=cfg['setting'].get('MySQL_username'), password=cfg['setting'].get('MySQL_Password'), database=cfg['setting'].get('MySQL_DB'), charset='utf8', connect_timeout=5)
+            conn = pymysql.connect(host=cfg['setting'].get('MySQL_ServerIP'), user=cfg['setting'].get('MySQL_username'), password=cfg['setting'].get('MySQL_Password'), database=cfg['setting'].get('MySQL_Database'), port=cfg['setting'].getint('MySQL_Port', 3306), charset='utf8mb4', autocommit=False)
             with conn.cursor() as cursor:
                 if cfg['setting'].getint('MySQL_InsertFlag', 0) == 1:
                     cursor.execute(f'INSERT INTO `{table}` SET iSN=%s, SMT_PN=%s, PANEL_SN=%s, `{detail}`=101 ON DUPLICATE KEY UPDATE SMT_PN=%s, PANEL_SN=%s', (sn, job, panel, job, panel))
                 else:
                     cursor.execute(f'UPDATE `{table}` SET SMT_PN=%s, PANEL_SN=%s, `{detail}`=101 WHERE iSN=%s', (job, panel, sn))
-                cursor.execute(f'INSERT INTO `{detail}` SET iSN=%s, errorCode=%s, JobNum=%s, ModelName=%s, operator=%s, Station=%s, StartTime=%s, StopTime=%s, logfilename=%s, log=%s', (sn, status, job, model, cfg['setting'].get('MySQL_Operator'), cfg['setting'].get('MySQL_Station'), file_dt, file_dt, file_name, file_name))
+                cursor.execute(f'INSERT INTO `{detail}` SET iSN=%s, errorCode=%s, JobNum=%s, ModelName=%s, operator=%s, Station=%s, StartTime=%s, StopTime=%s, logfilename=%s, log=%s', (sn, status, job, model, cfg['setting'].get('MySQL_Operator'), cfg['setting'].get('MySQL_Station'), file_dt, file_dt, file_name, status))
             conn.commit()
             with conn.cursor() as cursor:
                 cursor.execute(f'SELECT `{detail}` FROM `{table}` WHERE iSN=%s', (sn,)); main_ok = str((cursor.fetchone() or [None])[0]) == '101'
@@ -328,5 +338,5 @@ if __name__ == '__main__':
     try:
         import pymysql
     except ImportError:
-        root = tk.Tk(); root.title('警告'); root.geometry('300x100'); tk.Label(root, text='警告：您未安裝 pymysql 模組，無法繼續執行。', fg='red').pack(pady=20); root.mainloop(); raise SystemExit(1)
+        root = tk.Tk(); root.title('警告'); root.geometry('300x100'); tk.Label(root, text='警告：您未安裝 pymysql 模組，無法繼續執行。', fg='red').pack(pady=20); root.mainloop(); raise SystemExit
     create_setup_ui()
