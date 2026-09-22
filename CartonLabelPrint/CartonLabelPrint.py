@@ -37,6 +37,7 @@ class CartonSystemApp:
         self.s2_isn_list = []
         self.work_order_set = set()
         self.carton_scanned_count = 0
+        self.awaiting_new_carton = self.config.getboolean('settings', 'awaiting_new_carton', fallback=False)
         self.first_panel_id_of_carton = None  # 記錄該箱的第一個 panel_id
         self.load_label_data()
         
@@ -57,7 +58,7 @@ class CartonSystemApp:
                 'excel_name': '2544259S1S2.xlsx', 'label_name': 'Barcode label.lab',
                 'json_name': 'label_data.json', 'log_file': 'scan_record.log',
                 'tip_text': '請輸入或掃描資料（PANEL ID 23碼），並按 ENTER',
-                '2D_AOI_Flag': '0'
+                '2D_AOI_Flag': '0', 'awaiting_new_carton': '0'
             }
             with open(config_file, 'w', encoding='utf-8') as f: self.config.write(f)
 
@@ -83,6 +84,7 @@ class CartonSystemApp:
         self.cfg_c_serial = self.mysql_config.get('setting', 'MySQL_Carton_Serial', fallback='1')
         self.last_panel_id = self.config.get('settings', 'last_panel_id', fallback='')
         self.cfg_2d_aoi_flag = self.config.get('settings', '2D_AOI_Flag', fallback='0')
+        self.awaiting_new_carton = self.config.getboolean('settings', 'awaiting_new_carton', fallback=False)
         
     def create_widgets(self):
         """建立 GUI 介面，允許手動輸入修改"""
@@ -179,6 +181,15 @@ class CartonSystemApp:
         panel_id = self.entry_barcode.get().strip()
         self.entry_barcode.delete(0, tk.END)
         if not panel_id: return
+
+        if self.awaiting_new_carton:
+            self.reset_label_progress()
+            self.first_panel_id_of_carton = None
+            self.awaiting_new_carton = False
+            self.config.set('settings', 'awaiting_new_carton', '0')
+            with open(os.path.join(self.app_dir, 'config.ini'), 'w', encoding='utf-8') as config_file:
+                self.config.write(config_file)
+
         self.last_panel_id = panel_id
         self.config.set('settings', 'last_panel_id', panel_id)
         with open(os.path.join(self.app_dir, 'config.ini'), 'w', encoding='utf-8') as config_file:
@@ -361,6 +372,7 @@ class CartonSystemApp:
         with open(os.path.join(self.app_dir, "MySQLConfig.ini"), "w", encoding="utf-8") as config_file:
             self.mysql_config.write(config_file)
         self.config.set('settings', 'last_panel_id', self.last_panel_id)
+        self.config.set('settings', 'awaiting_new_carton', '1' if self.awaiting_new_carton else '0')
         with open(os.path.join(self.app_dir, "config.ini"), "w", encoding="utf-8") as config_file:
             self.config.write(config_file)
 
@@ -608,6 +620,8 @@ class CartonSystemApp:
 
     def manual_reset_count(self):
         """手動點擊清空計數按鈕"""
+        self.awaiting_new_carton = False
+        self.config.set('settings', 'awaiting_new_carton', '0')
         self.reset_label_progress()
         self.first_panel_id_of_carton = None
         messagebox.showinfo("清空完成", "目前箱內計數已清空")
@@ -646,14 +660,10 @@ class CartonSystemApp:
                 if carton >= 2:
                     self.entries["MySQL_Carton_Serial:"].delete(0, tk.END)
                     self.entries["MySQL_Carton_Serial:"].insert(0, "1")
+                self.awaiting_new_carton = True
+                self.config.set('settings', 'awaiting_new_carton', '1')
                 self.save_runtime_settings()
-                # 列印完清空計數
-                self.s1_isn_list.clear()
-                self.s2_isn_list.clear()
-                self.work_order_set.clear()
-                self.carton_scanned_count = 0
-                self.first_panel_id_of_carton = None
-                self.clear_label_data()
+                # 列印完成後保留 JSON 與計數，等下一箱第一片掃描時再清空
             except subprocess.TimeoutExpired:
                 self.play_sound("buzz.wav")
                 self.log_message("❌ FAIL：列印程序逾時，維持目前箱號與流水號", "red")
