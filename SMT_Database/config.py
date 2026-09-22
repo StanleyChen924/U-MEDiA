@@ -32,7 +32,7 @@ else:
     config['PATH'] = {
         'SCAN_DIR': './ScanFolder',
         'BACKUP_DIR': './BackupFolder',
-        'LOG_FILENAME': './LOG/system_log20260909.txt'
+        'LOG_FILENAME': LOG_FILENAME
     }
     with open(config_file_path, 'w', encoding='utf-8') as configfile:
         config.write(configfile)
@@ -50,6 +50,7 @@ if not os.path.exists(SCAN_DIR):
 if not os.path.exists(BACKUP_DIR):
     os.makedirs(BACKUP_DIR)
 
+os.makedirs(os.path.dirname(LOG_FILENAME), exist_ok=True)
 
 # 自動建立掃描與備份所需的資料夾
 os.makedirs(SCAN_DIR, exist_ok=True)
@@ -99,6 +100,7 @@ def load_config():
     config.read(INI_FILENAME, encoding='utf-8')
     return config
 
+
 def save_config(config, job, model, operator, station):
     """將修改後的 4 個數值覆寫回原 INI，並完美保留所有 `//` 註解"""
     try:
@@ -116,7 +118,7 @@ def save_config(config, job, model, operator, station):
             if stripped.startswith('//') or stripped.startswith('#') or stripped.startswith(';'):
                 new_lines.append(line)
                 continue
-            
+
             replaced = False
             for key, val in targets.items():
                 # 使用分割符來精準匹配 key，避免空格影響
@@ -136,13 +138,26 @@ def save_config(config, job, model, operator, station):
         messagebox.showerror("錯誤", f"存檔失敗：{e}")
         return False
 
+
+def mysql_safe_identifier(name, field_name="identifier"):
+    """驗證 SQL 識別字（表名/欄位名）避免 `%s` 風險與注入問題。"""
+    if name is None:
+        raise ValueError(f"{field_name} 不可為空")
+
+    value = str(name).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_]+", value):
+        raise ValueError(f"{field_name} 含有非法字元：{name}")
+    return value
+
+
 def log_and_display(message):
     """將訊息寫入 LOG 檔，並即時顯示在監控視窗的 Text 欄位中"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     full_message = f"[{timestamp}] {message}"
-    
+
     # 1. 寫入本地 LOG 檔案
     try:
+        os.makedirs(os.path.dirname(LOG_FILENAME), exist_ok=True)
         with open(LOG_FILENAME, 'a', encoding='utf-8') as log_file:
             log_file.write(full_message + "\n")
     except Exception as e:
@@ -155,6 +170,8 @@ def log_and_display(message):
             monitor_text_area.see(tk.END) # 自動滾動到最底端
         except Exception:
             pass
+
+
 # ==============================================================================
 # 2. 讀取檔案：讀取所有excel檔案
 # ==============================================================================
@@ -228,83 +245,75 @@ def align_dataframe_columns(df):
 
 
 def load_all_excel_files():
-		# 1. 設定放置所有 .xlsx 檔案的資料夾路徑 ('.' 代表目前程式所在的資料夾)
-		folder_path = '.' 
-		file_pattern = os.path.join(folder_path, '*.xlsx')
+    # 1. 設定放置所有 .xlsx 檔案的資料夾路徑 ('.' 代表目前程式所在的資料夾)
+    folder_path = '.'
+    file_pattern = os.path.join(folder_path, '*.xlsx')
 
-		# 2. 找出所有符合的 .xlsx 檔案
-		excel_files = glob.glob(file_pattern)
+    # 2. 找出所有符合的 .xlsx 檔案
+    excel_files = glob.glob(file_pattern)
 
-		# 定義最終保留的標準欄位：保留原本欄位，並追加新增的判斷欄位
-		required_columns = ['工單號']
-		output_columns = ['工單號', 'PANEL_NO', '序號(SN)', '併板主PNL', '序號(S1SN)', '序號(S2SN)']
+    # 定義最終保留的標準欄位：保留原本欄位，並追加新增的判斷欄位
+    required_columns = ['工單號']
+    output_columns = ['工單號', 'PANEL_NO', '序號(SN)', '併板主PNL', '序號(S1SN)', '序號(S2SN)']
 
-		# 3. 建立一個空的串列，用來存放每個檔案處理後的資料
-		df_list = []
+    # 3. 建立一個空的串列，用來存放每個檔案處理後的資料
+    df_list = []
 
-		#print("--- 開始讀取與標準化 Excel 檔案 ---")
-		for file_path in excel_files:
-				filename = os.path.basename(file_path)
-				try:
-						# 讀取 Excel 檔案
-						# df = pd.read_excel(file_path)
-						df = pd.read_excel(file_path, dtype={'PANEL_NO': str})
-        
-						# 清除欄位名稱的前後空白，避免因為「工單號 」有空格而對不上
-						df.columns = df.columns.str.strip()
+    for file_path in excel_files:
+        filename = os.path.basename(file_path)
+        try:
+            df = pd.read_excel(file_path, dtype={'PANEL_NO': str})
 
-						# 自動對齊常見欄位別名，提升 Excel 相容性
-						df = align_dataframe_columns(df)
+            # 清除欄位名稱的前後空白，避免因為「工單號 」有空格而對不上
+            df.columns = df.columns.str.strip()
 
-						# 補齊舊欄位與新判斷欄位的相互對應，兼容兩種 Excel 格式
-						if 'PANEL_NO' not in df.columns and '併板主PNL' in df.columns:
-							df['PANEL_NO'] = df['併板主PNL']
-						if '併板主PNL' not in df.columns and 'PANEL_NO' in df.columns:
-							df['併板主PNL'] = df['PANEL_NO']
+            # 自動對齊常見欄位別名，提升 Excel 相容性
+            df = align_dataframe_columns(df)
 
-						if '序號(SN)' not in df.columns:
-							if '序號(S1SN)' in df.columns:
-								df['序號(SN)'] = df['序號(S1SN)']
-							elif '序號(S2SN)' in df.columns:
-								df['序號(SN)'] = df['序號(S2SN)']
-						if '序號(S1SN)' not in df.columns and '序號(SN)' in df.columns:
-							df['序號(S1SN)'] = df['序號(SN)']
-						if '序號(S2SN)' not in df.columns and '序號(SN)' in df.columns:
-							df['序號(S2SN)'] = df['序號(SN)']
-        
-						# 檢查該 Excel 是否包含最少必要欄位（工單號）
-						missing_cols = [col for col in required_columns if col not in df.columns]
-						if missing_cols:
-								print(f"⚠️ 檔案 [{filename}] 缺少必須欄位 {missing_cols}，將跳過此檔案。")
-								continue
-            
-						# 只保留標準欄位，並把新判斷欄位保留為空白（若原檔沒有則為 NaN）
-						df_filtered = df.reindex(columns=output_columns).copy()
-        
-						# 【重要】將所有資料轉為字串並去除前後空白，防止比對時因格式不符（如數字/文字混雜）而失敗
-						for col in output_columns:
-								df_filtered[col] = df_filtered[col].apply(lambda x: x.strip() if isinstance(x, str) else x)
-            
-						# 選擇性：記錄來源檔案，方便未來異常追溯
-						df_filtered['來源檔案'] = filename
-        
-						df_list.append(df_filtered)
-						#print(f"✅ 成功載入: {filename} (資料筆數: {len(df_filtered)})")
-        
-				except Exception as e:
-						print(f"❌ 讀取檔案失敗 [{filename}]: {e}")
+            # 補齊舊欄位與新判斷欄位的相互對應，兼容兩種 Excel 格式
+            if 'PANEL_NO' not in df.columns and '併板主PNL' in df.columns:
+                df['PANEL_NO'] = df['併板主PNL']
+            if '併板主PNL' not in df.columns and 'PANEL_NO' in df.columns:
+                df['併板主PNL'] = df['PANEL_NO']
 
-		# 4. 合併所有資料，形成最終的標準化 BUFF
-		if df_list:
-		# 這裡的 data_buffer 就是您要的綜合資料緩衝區
-				data_buffer = pd.concat(df_list, axis=0, ignore_index=True)
-				#print(f"\n--- BUFF 整合完成 ---")
-				#print(f"BUFF 總資料筆數: {len(data_buffer)}")
-				return data_buffer
-		else:
-				data_buffer = pd.DataFrame(columns=output_columns)
-				print("\n❌ 錯誤：沒有成功讀取到任何符合欄位條件的 Excel 檔案。")
-				return pd.DataFrame()
+            if '序號(SN)' not in df.columns:
+                if '序號(S1SN)' in df.columns:
+                    df['序號(SN)'] = df['序號(S1SN)']
+                elif '序號(S2SN)' in df.columns:
+                    df['序號(SN)'] = df['序號(S2SN)']
+            if '序號(S1SN)' not in df.columns and '序號(SN)' in df.columns:
+                df['序號(S1SN)'] = df['序號(SN)']
+            if '序號(S2SN)' not in df.columns and '序號(SN)' in df.columns:
+                df['序號(S2SN)'] = df['序號(SN)']
+
+            # 檢查該 Excel 是否包含最少必要欄位（工單號）
+            missing_cols = [col for col in required_columns if col not in df.columns]
+            if missing_cols:
+                print(f"⚠️ 檔案 [{filename}] 缺少必須欄位 {missing_cols}，將跳過此檔案。")
+                continue
+
+            df_filtered = df.reindex(columns=output_columns).copy()
+
+            # 【重要】將所有資料轉為字串並去除前後空白，防止比對時因格式不符（如數字/文字混雜）而失敗
+            for col in output_columns:
+                df_filtered[col] = df_filtered[col].apply(lambda x: x.strip() if isinstance(x, str) else x)
+
+            # 選擇性：記錄來源檔案，方便未來異常追溯
+            df_filtered['來源檔案'] = filename
+
+            df_list.append(df_filtered)
+
+        except Exception as e:
+            print(f"❌ 讀取檔案失敗 [{filename}]: {e}")
+
+    # 4. 合併所有資料，形成最終的標準化 BUFF
+    if df_list:
+        data_buffer = pd.concat(df_list, axis=0, ignore_index=True)
+        return data_buffer
+    else:
+        data_buffer = pd.DataFrame(columns=output_columns)
+        print("\n❌ 錯誤：沒有成功讀取到任何符合欄位條件的 Excel 檔案。")
+        return pd.DataFrame()
 
 
 # 模式 A：使用 DataFrame 直接篩選比對（適合查出該 PANEL_NO 的完整整列資料）
@@ -348,7 +357,11 @@ def find_sn_by_panel_df(target_panel, buffer, BSN):
     expanded_result = pd.DataFrame(expanded_rows)
 
     # 4. 將傳入的 BSN 轉為整數
-    target_index = int(BSN)
+    try:
+        target_index = int(BSN)
+    except (TypeError, ValueError):
+        print(f"⚠️ 警告：BSN [{BSN}] 非法，無法比對。")
+        return pd.DataFrame()
 
     # 5. 防呆：檢查比對到的總筆數，是否足夠抓取指定的第幾筆
     if len(expanded_result) >= target_index:
@@ -361,7 +374,6 @@ def find_sn_by_panel_df(target_panel, buffer, BSN):
         record = pd.DataFrame()
 
     return record
-
 
 
 # ==============================================================================
@@ -382,13 +394,21 @@ def parse_content_file(file_path):
         print(f"讀取檔案 {file_path} 失敗: {e}")
     return sn, dt
 
-def upload_to_mysql(sn_param, file_datetime, Side, status, cfg , MySQL_Job , panel_no, file_name, ModelName):
+
+def upload_to_mysql(sn_param, file_datetime, Side, status, cfg, MySQL_Job, panel_no, file_name, ModelName):
     if cfg['setting'].getint('MySQL_FLAG', 0) != 1:
         log_and_display("MySQL_FLAG 未啟用，跳過上拋。")
         return False
 
     max_retries = 3
-    last_error = None
+
+    try:
+        MySQL_TYPE = mysql_safe_identifier(cfg['setting'].get('MySQL_TYPE', 'CARD'), 'MySQL_TYPE')
+        base_table = mysql_safe_identifier(cfg['setting'].get('TableDetailStr', 'STA1'), 'TableDetailStr')
+        TableDetailStr = f"{base_table}_B" if Side == "B" else f"{base_table}_T"
+    except ValueError as e:
+        log_and_display(f"MySQL 表名設定錯誤: {e}")
+        return False
 
     for attempt in range(1, max_retries + 1):
         conn = None
@@ -410,61 +430,102 @@ def upload_to_mysql(sn_param, file_datetime, Side, status, cfg , MySQL_Job , pan
                 charset='utf8',
                 connect_timeout=5
             )
-            #table_name = cfg['setting'].get('TableDetailStr', 'STA1')
 
-            MySQL_InsertFlag = int(cfg['setting'].get('MySQL_InsertFlag', 0)) # 轉為整數
-            #TableDetailStr = cfg['setting'].get('TableDetailStr')
-            MySQL_TYPE = cfg['setting'].get('MySQL_TYPE') 
-            if Side == "B":
-                TableDetailStr = cfg['setting'].get('TableDetailStr') + "_B"
-            else:
-                TableDetailStr = cfg['setting'].get('TableDetailStr') + "_T"
-            
+            MySQL_InsertFlag = int(cfg['setting'].get('MySQL_InsertFlag', 0))
+
             with conn.cursor() as cursor:
-
-                
                 full_string = ""
-                #if MySQL_InsertFlag == 1:
-                #    sql = f"INSERT INTO {MySQL_TYPE} SET iSN='{sn_param}',{TableDetailStr} = 101 ON DUPLICATE KEY UPDATE {TableDetailStr} =  101"
-                #else:
-                #    sql = f"UPDATE {MySQL_TYPE} SET {TableDetailStr}=101 {full_string} WHERE iSN = '{sn_param}'"
-                #print(f"Sql Command= {sql}")
-                
+
                 if MySQL_InsertFlag == 1:
-                    sql = f"INSERT INTO {MySQL_TYPE} SET iSN='{sn_param}', SMT_PN='{MySQL_Job}', PANEL_SN='{panel_no}', {TableDetailStr} = 101 ON DUPLICATE KEY UPDATE SMT_PN='{MySQL_Job}', PANEL_SN='{panel_no}', {TableDetailStr} = 101"
+                    sql = (
+                        f"INSERT INTO `{MySQL_TYPE}` "
+                        "SET iSN=%s, SMT_PN=%s, PANEL_SN=%s, "
+                        f"`{TableDetailStr}`=101 "
+                        "ON DUPLICATE KEY UPDATE "
+                        "SMT_PN=%s, PANEL_SN=%s"
+                    )
+                    cursor.execute(
+                        sql,
+                        (sn_param, MySQL_Job, panel_no, MySQL_Job, panel_no)
+                    )
                 else:
-                        sql = f"UPDATE {MySQL_TYPE} SET SMT_PN='{MySQL_Job}', PANEL_SN='{panel_no}', {TableDetailStr}=101 {full_string} WHERE iSN = '{sn_param}'"
-                print(f"Sql Command= {sql}")
+                    sql = (
+                        f"UPDATE `{MySQL_TYPE}` SET "
+                        "SMT_PN=%s, PANEL_SN=%s, "
+                        f"`{TableDetailStr}`=101 {full_string} "
+                        "WHERE iSN = %s"
+                    )
+                    cursor.execute(sql, (MySQL_Job, panel_no, sn_param))
 
-                cursor.execute(sql)
-
-                #MySQL_Job = cfg['setting'].get('MySQL_Job')
-                #MySQL_ModelName = cfg['setting'].get('MySQL_ModelName')
-                MySQL_ModelName=ModelName
+                MySQL_ModelName = ModelName
                 MySQL_Operator = cfg['setting'].get('MySQL_Operator')
                 MySQL_Station = cfg['setting'].get('MySQL_Station')
 
-                full_string = ""
-                sql = (f"INSERT INTO {TableDetailStr} SET "
-                            f"iSN = '{sn_param}',"
-                            f"errorCode = '{status}',"
-                            f"JobNum = '{MySQL_Job}',"
-                            f"ModelName = '{MySQL_ModelName}',"
-                            f"operator = '{MySQL_Operator}',"
-                            f"Station = '{MySQL_Station}',"
-                            f"StartTime = '{file_datetime}',"
-                            f"StopTime = '{file_datetime}',"
-                            f"logfilename = '{file_name}',"
-                            f"log = '{file_name}'"
-                            f"{full_string}"
+                sql = (
+                    f"INSERT INTO `{TableDetailStr}` SET "
+                    "iSN=%s, errorCode=%s, JobNum=%s, ModelName=%s, "
+                    "operator=%s, Station=%s, StartTime=%s, StopTime=%s, "
+                    "logfilename=%s, log=%s"
+                )
+                cursor.execute(
+                    sql,
+                    (
+                        sn_param,
+                        status,
+                        MySQL_Job,
+                        MySQL_ModelName,
+                        MySQL_Operator,
+                        MySQL_Station,
+                        file_datetime,
+                        file_datetime,
+                        file_name,
+                        file_name,
                     )
-                print(f"Sql Command= {sql}")
-                cursor.execute(sql)
+                )
 
             conn.commit()
-            return True
+
+            # 二次確認：確認主表狀態與明細表紀錄是否已成功寫入
+            with conn.cursor() as verify_cursor:
+                verify_main_sql = (
+                    f"SELECT `{TableDetailStr}` FROM `{MySQL_TYPE}` WHERE iSN = %s"
+                )
+                verify_cursor.execute(verify_main_sql, (sn_param,))
+                main_result = verify_cursor.fetchone()
+                main_upload_success = main_result is not None and str(main_result[0]) == "101"
+
+                verify_detail_sql = (
+                    f"SELECT 1 FROM `{TableDetailStr}` "
+                    "WHERE iSN = %s AND JobNum = %s AND logfilename = %s LIMIT 1"
+                )
+                verify_cursor.execute(
+                    verify_detail_sql,
+                    (sn_param, MySQL_Job, file_name)
+                )
+                detail_upload_success = verify_cursor.fetchone() is not None
+
+            if main_upload_success and detail_upload_success:
+                log_and_display(
+                    f"[二次確認成功][SN={sn_param}][PANEL={panel_no}]"
+                    f"[主表狀態={TableDetailStr}=101][明細紀錄存在]"
+                )
+                return True
+
+            if not main_upload_success:
+                log_and_display(
+                    f"[二次確認失敗][SN={sn_param}][PANEL={panel_no}]"
+                    f"[主表未確認為 {TableDetailStr}=101]"
+                )
+
+            if not detail_upload_success:
+                log_and_display(
+                    f"[二次確認失敗][SN={sn_param}][PANEL={panel_no}]"
+                    f"[明細表無對應紀錄][Job={MySQL_Job}][File={file_name}]"
+                )
+
+            return False
+
         except Exception as e:
-            last_error = e
             log_and_display(
                 f"[重送上傳][SN={sn_param}][DB寫入][失敗][第{attempt}/{max_retries}次][錯誤={e}]"
             )
@@ -484,9 +545,9 @@ def upload_to_mysql(sn_param, file_datetime, Side, status, cfg , MySQL_Job , pan
                 except Exception:
                     pass
 
+
 def scan_folder_loop():
     # 1. 先讀取所有的 Excel 檔案建立 BUFF
-    #data_buffer = read_excel_file() # 假設這是您前面寫的讀取 Excel 函式
     while True:
         try:
             current_cfg = load_config()
@@ -495,39 +556,30 @@ def scan_folder_loop():
                 log_and_display(f"偵測到 {len(files)} 個新檔案，開始比對並上拋...")
                 for file_name in files:
                     file_path = os.path.join(SCAN_DIR, file_name)
-                    
+
                     # 使用獨立 try-except 隔離單一檔案錯誤，避免整個迴圈中斷
                     try:
                         # 1. 解析檔名（假設格式：機型_工單_PANELNO_狀態_面別_時間.xlsx，請依實際情況微調索引）
                         result = file_name.split('_')
-                        
+
                         # 安全防呆：確保檔名資訊完整，避免 IndexError
                         if len(result) < 5:
                             log_and_display(f"⚠️ 檔案 [{file_name}] 名稱格式不符，跳過處理。")
                             # 仍將錯誤檔名搬移，避免卡在掃描區
                             shutil.move(file_path, os.path.join(BACKUP_DIR, f"ERR_NAME_{file_name}"))
                             continue
-                            
-                        # result[0]機型
-                        # result[1]工單
-                        # result[2]PANELNO
-                        # result[3]狀態
-                        # result[4]版序
-                        # result[5]機種名稱面別(最後一碼)
-                        # result[6]時間
-                        
+
                         Station = result[0]
                         panel_no = result[2].strip()  # 取出 PANEL_NO 用於比對
                         status = result[3]
                         BSN = result[4]
                         ModelName = result[5][:-1]
-                        #Side = result[7]
                         target_field = result[-2]
                         Side = target_field[-1]
+
                         # 2. 處理時間欄位防呆（假設時間在 result[5]，請根據您真實的檔名位置修改索引數字）
-                        # 這裡示範如果時間在最後一個欄位（例如帶有副檔名，先去掉副檔名）
-                        time_part = os.path.splitext(result[-1])[0].strip().upper() 
-                        
+                        time_part = os.path.splitext(result[-1])[0].strip().upper()
+
                         if time_part == 'NONE' or time_part == '':
                             file_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             log_and_display(f"⚠️ 檔案 [{file_name}] 時間為 NONE，自動代入目前系統時間。")
@@ -541,27 +593,21 @@ def scan_folder_loop():
 
                         # 3. 透過 PANEL_NO 到 Excel 緩衝區 (data_buffer) 比對找出 序號(SN)
                         df_res = find_sn_by_panel_df(panel_no, data_buffer, BSN)
-                        
-                        # 🌟 關鍵修改：明確排除 FAIL 狀態，其餘狀態皆可上拋
+
+                        # 明確排除 FAIL 狀態，其餘狀態皆可上拋
                         if status.upper() == "FAIL":
                             log_and_display(f"ℹ️ 檔案 [{file_name}] 狀態為 FAIL，跳過上拋資料庫。")
-                            prefix = "SKIP_FAIL_"
-                        
                         else:
                             if df_res is not None and not df_res.empty:
                                 log_and_display(f" PANEL_NO [{panel_no}] 比對成功，找到 {len(df_res)} 筆對應的 SN 資料，開始逐筆上拋...")
-                            
+
                                 # 4. 走訪比對到的每一筆資料，將資料全部上拋到資料庫
                                 for _, row in df_res.iterrows():
-                                    # 從 Excel 緩衝區撈出對應的正確 SN 與工單號
                                     actual_sn = str(row['序號(SN)']).strip()
-                                    # work_order = str(row['工單號']).strip()
                                     work_order = result[1]
                                     MySQL_Job = work_order
-                                    # 執行上拋（將比對到的 actual_sn 帶入原本的 sn 位置）
-                                    # 提示：如果您的 upload_to_mysql 需要工單號，請記得將其作為參數傳入
                                     success = upload_to_mysql(actual_sn, file_dt, Side, status, current_cfg, MySQL_Job, panel_no, file_name, ModelName)
-                                
+
                                     if success:
                                         log_and_display(f"  └─ 成功: PANEL [{panel_no}] -> 轉出 SN: {actual_sn} 上拋成功")
                                     else:
@@ -574,12 +620,12 @@ def scan_folder_loop():
 
                     # 5. 無論上拋成功與否（或沒比對到），皆搬移檔案至備份目錄，保持目錄清空
                     dest_path = os.path.join(BACKUP_DIR, file_name)
-                    
+
                     if os.path.exists(dest_path):
                         base, ext = os.path.splitext(file_name)
                         timestamp = datetime.now().strftime("%H%M%S")
                         dest_path = os.path.join(BACKUP_DIR, f"{base}_{timestamp}{ext}")
-                    
+
                     try:
                         shutil.move(file_path, dest_path)
                     except Exception as move_e:
@@ -589,8 +635,9 @@ def scan_folder_loop():
                 pass
         except Exception as e:
             log_and_display(f"⚠️ 掃描迴圈最外層發生嚴重錯誤: {e}")
-            
+
         time.sleep(30)
+
 
 # ==============================================================================
 # 4. UI 介面控制邏輯
@@ -598,10 +645,10 @@ def scan_folder_loop():
 def open_monitor_ui():
     """【第二階段】開啟自動掃描監控 UI 視窗 (含文字顯示與滾動條)"""
     global monitor_text_area
-    
+
     monitor_root = tk.Tk()
     monitor_root.title("系統執行監控中")
-    monitor_root.geometry("550x380") 
+    monitor_root.geometry("550x380")
     monitor_root.resizable(False, False)
 
     # 標題
@@ -610,7 +657,7 @@ def open_monitor_ui():
     # ScrolledText 欄位：即時顯示掃描與檔案資訊
     monitor_text_area = scrolledtext.ScrolledText(monitor_root, width=65, height=14, font=("Consolas", 9), bg="#1e1e1e", fg="#d4d4d4")
     monitor_text_area.pack(padx=15, pady=5)
-    
+
     log_and_display("監控服務啟動成功。")
 
     def on_exit():
@@ -627,12 +674,12 @@ def open_monitor_ui():
 
     monitor_root.mainloop()
 
+
 def create_setup_ui():
     """【第一階段】設定 INI 的初始 UI 視窗"""
     global root, entries, config_data, excel_data, data_buffer
-    
+
     config_data = load_config()
-    #excel_data = read_excel_file()
     setting = config_data['setting'] if 'setting' in config_data else {}
 
     root = tk.Tk()
@@ -672,7 +719,7 @@ def create_setup_ui():
 
     btn_frame = tk.Frame(root)
     btn_frame.grid(row=4, column=0, columnspan=2, pady=15)
-    
+
     btn_cancel = tk.Button(btn_frame, text=" 否 (不存檔直接監控) ", bg="#d9534f", fg="white", font=("微軟正黑體", 9, "bold"), width=16, command=on_cancel)
     btn_cancel.pack(side="left", padx=15)
 
@@ -681,25 +728,14 @@ def create_setup_ui():
 
     root.mainloop()
 
+
 # ==============================================================================
 # 主程式入口 (包含環境檢測與防閃退)
 # ==============================================================================
 if __name__ == "__main__":
     # 讀取 Excel 建立 BUFF
-    data_buffer = load_all_excel_files() 
-    
-    # === 【除錯檢查區】 ===
-    #    print("\n========================================")
-    #    print(f"📊 檢查：目前 Excel BUFF 總資料筆數: {len(data_buffer)} 筆")
-    #    if not data_buffer.empty:
-    #        print("📋 整合後的所有欄位名稱:", list(data_buffer.columns))
-    #        print("👀 前 5 筆資料預覽:")
-    #        print(data_buffer[['工單號', 'PANEL_NO', '序號(SN)']].head(5))
-    #    print("========================================\n")
-    
-    # 啟動執行緒
-    #t = threading.Thread(target=scan_folder_loop(), args=(data_buffer,))
-    #t.start()
+    data_buffer = load_all_excel_files()
+
     try:
         # 動態載入 pymysql
         import pymysql
@@ -712,6 +748,6 @@ if __name__ == "__main__":
         tk.Label(root, text="警告：您未安裝 pymysql 模組，無法繼續執行。", font=("Arial", 10, "bold"), fg="red").pack(pady=20)
         root.mainloop()
         exit(1)
-    
+
     # 執行主 UI
     create_setup_ui()
