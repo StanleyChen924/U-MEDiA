@@ -1,5 +1,6 @@
 import configparser
 from datetime import datetime
+import math
 import pathlib
 import re
 import tkinter as tk
@@ -206,19 +207,13 @@ def execute_export():
             messagebox.showinfo("提示", "找不到符合條件且 CARTON_NO 有值的資料。")
             return
 
-        if total_qty % qty_per_carton == 0:
-            expected_cartons = total_qty // qty_per_carton
-            if len(df) > expected_cartons:
-                df = df.head(expected_cartons).copy()
-            elif len(df) < expected_cartons:
-                messagebox.showwarning(
-                    "提醒",
-                    "資料庫查到的 CARTON 筆數不足，已依實際資料筆數匯出。",
-                )
-        else:
+        expected_cartons = math.ceil(total_qty / qty_per_carton)
+        if len(df) > expected_cartons:
+            df = df.head(expected_cartons).copy()
+        elif len(df) < expected_cartons:
             messagebox.showwarning(
                 "提醒",
-                "QTY 總數量不是每箱數量的整數倍，已按實際資料筆數匯出。",
+                f"資料庫查到的 CARTON 筆數不足，預計 {expected_cartons} 箱，已依實際資料筆數匯出。",
             )
 
         # QTY 代表本次所有出貨的總數量，不是單一 CARTON 的數量。
@@ -273,7 +268,7 @@ def input_row(label, default="", widget_type="entry", values=()):
     if widget_type == "combo":
         widget = ttk.Combobox(row, values=values, font=("Microsoft JhengHei", 10))
     else:
-        widget = ttk.Entry(row, font=("Microsoft JhengHei", 10))
+        widget = ttk.Entry(row, font=("Microsoft Jheng Hei", 10))
     if default:
         widget.insert(0, default)
     widget.pack(side=tk.LEFT, fill=tk.X, expand=True)
