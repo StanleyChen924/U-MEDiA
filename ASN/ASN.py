@@ -14,6 +14,7 @@ from openpyxl import load_workbook
 BASE_DIR = pathlib.Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "ASNFile"
 TEMPLATE_PATTERN = "*shipping list.xlsx"
+LAST_WORK_ORDER_FILE = BASE_DIR / "last_work_order.ini"
 
 DB_COLUMNS = [
     "COMPLETE_TIME", "RELATION_ORDER", "DN_ITEM", "CUST_PART_NO", "PART_NO",
@@ -44,6 +45,28 @@ def read_db_config(config_file="MySQLConfig.ini"):
     except Exception as exc:
         messagebox.showerror("配置錯誤", f"無法讀取設定檔 {config_file}\n原因: {exc}")
         raise
+
+
+def load_last_work_order():
+    if not LAST_WORK_ORDER_FILE.exists():
+        return ""
+    config = configparser.ConfigParser()
+    try:
+        config.read(LAST_WORK_ORDER_FILE, encoding="utf-8")
+        if config.has_section("settings"):
+            return config.get("settings", "last_work_order", fallback="")
+    except Exception:
+        return ""
+    return ""
+
+
+def save_last_work_order(work_order):
+    if not work_order:
+        return
+    config = configparser.ConfigParser()
+    config["settings"] = {"last_work_order": work_order}
+    with LAST_WORK_ORDER_FILE.open("w", encoding="utf-8") as handle:
+        config.write(handle)
 
 
 def increment_pallet_no(base_str, increment_by):
@@ -133,6 +156,9 @@ def read_template_definition():
 
 def execute_export():
     work_order = entry_wo.get().strip()
+    if work_order:
+        save_last_work_order(work_order)
+
     model_name = combo_model.get().strip()
     qty_text = entry_qty.get().strip()
     input_po = entry_po.get().strip()
@@ -223,6 +249,10 @@ def focus_next(widget):
     widget.focus_set()
 
 
+def remember_work_order(event=None):
+    save_last_work_order(entry_wo.get().strip())
+
+
 selected_columns, _, model_choices = read_template_definition()
 root = tk.Tk()
 root.title("ASN Log 資料匯出工具")
@@ -248,7 +278,7 @@ def input_row(label, default="", widget_type="entry", values=()):
     return widget
 
 
-entry_wo = input_row("請輸入工單號碼：", "WOTQ7553D")
+entry_wo = input_row("請輸入工單號碼：", load_last_work_order() or "WOTQ7553D")
 entry_po = input_row("請輸入 PO 號碼：")
 combo_model = input_row("ModelName：", widget_type="combo", values=model_choices)
 entry_qty = input_row("QTY（產生數量）：", "1")
@@ -259,6 +289,9 @@ entry_product_part_no = input_row("成品料號：")
 entry_shipping_date = input_row("Shipping_Date：")
 entry_pallet = input_row("PALLET_NO 起始值：", "PL001")
 entry_carton_count = input_row("幾個 CARTON 換棧板：", "2")
+
+entry_wo.bind("<FocusOut>", remember_work_order)
+entry_wo.bind("<Return>", lambda event: (save_last_work_order(entry_wo.get().strip()), execute_export()))
 
 label_status = tk.Label(frame, text="狀態：準備就緒", font=("Microsoft JhengHei", 9), fg="gray")
 label_status.pack(pady=5)
