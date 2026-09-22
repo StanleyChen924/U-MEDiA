@@ -434,7 +434,7 @@ def upload_to_mysql(sn_param, file_datetime, Side, status, cfg , MySQL_Job , pan
                     sql = f"INSERT INTO {MySQL_TYPE} SET iSN='{sn_param}', SMT_PN='{MySQL_Job}', PANEL_SN='{panel_no}', {TableDetailStr} = 101 ON DUPLICATE KEY UPDATE SMT_PN='{MySQL_Job}', PANEL_SN='{panel_no}', {TableDetailStr} = 101"
                 else:
                         sql = f"UPDATE {MySQL_TYPE} SET SMT_PN='{MySQL_Job}', PANEL_SN='{panel_no}', {TableDetailStr}=101 {full_string} WHERE iSN = '{sn_param}'"
-                print(f"Sql Command= {sql}")
+                #print(f"Sql Command= {sql}")
 
                 cursor.execute(sql)
 
@@ -458,7 +458,7 @@ def upload_to_mysql(sn_param, file_datetime, Side, status, cfg , MySQL_Job , pan
                             f"log = '{file_name}'"
                             f"{full_string}"
                     )
-                print(f"Sql Command= {sql}")
+                #print(f"Sql Command= {sql}")
                 cursor.execute(sql)
 
             conn.commit()
