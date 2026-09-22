@@ -35,7 +35,6 @@ class CartonSystemApp:
         # 初始化記憶體資料結構
         self.s1_isn_list = []
         self.s2_isn_list = []
-        self.work_order_set = set()
         self.carton_scanned_count = 0
         self.awaiting_new_carton = self.config.getboolean('settings', 'awaiting_new_carton', fallback=False)
         self.first_panel_id_of_carton = None  # 記錄該箱的第一個 panel_id
@@ -330,9 +329,6 @@ class CartonSystemApp:
                     else:
                         worksheet.cell(row=row_number, column=runtime_columns[f"{station_name}_StopTime"]).value = ""
 
-                row_wo = str(row[0].value or '').strip()
-                self.work_order_set.add(row_wo)
-
             self.play_sound("pass.wav")
                 
             # 寫回 Excel 檔案
@@ -391,7 +387,6 @@ class CartonSystemApp:
         try:
             with open(json_file, 'r', encoding='utf-8') as data_file:
                 data = json.load(data_file)
-            self.work_order_set = set(data.get('WorkOrders', []))
             if data.get('S1QRCode1') is not None or data.get('S2QRCode1') is not None:
                 self.s1_isn_list = [
                     isn for key in ('S1QRCode1', 'S1QRCode2', 'S1QRCode3', 'S1QRCode4')
@@ -401,21 +396,12 @@ class CartonSystemApp:
                     isn for key in ('S2QRCode1', 'S2QRCode2', 'S2QRCode3', 'S2QRCode4')
                     for isn in str(data.get(key, '')).split(',') if isn.strip()
                 ]
-            elif len(self.work_order_set) == 1:
+            else:
                 self.s1_isn_list = [
                     isn for key in ('QRCode1', 'QRCode5', 'QRCode3', 'QRCode4')
                     for isn in str(data.get(key, '')).split(',') if isn.strip()
                 ]
                 self.s2_isn_list = []
-            else:
-                self.s1_isn_list = [
-                    isn for key in ('QRCode1', 'QRCode3')
-                    for isn in str(data.get(key, '')).split(',') if isn.strip()
-                ]
-                self.s2_isn_list = [
-                    isn for key in ('QRCode5', 'QRCode4')
-                    for isn in str(data.get(key, '')).split(',') if isn.strip()
-                ]
             self.carton_scanned_count = len(self.s1_isn_list) + len(self.s2_isn_list)
         except (OSError, json.JSONDecodeError) as error:
             print(f"無法讀取 label_data.json: {error}")
@@ -507,8 +493,8 @@ class CartonSystemApp:
         )
         
         has_both_sides = bool(self.s1_isn_list and self.s2_isn_list)
-        # 單一工單且只有一側時維持舊格式；S1/S2 成對資料固定分組。
-        if len(self.work_order_set) == 1 and not has_both_sides:
+        # 僅有一側時維持舊格式；S1/S2 成對資料固定分組。
+        if not has_both_sides:
             isn_list = self.s1_isn_list + self.s2_isn_list
             qr1_str = ",".join(isn_list[:40])
             qr2_str = ",".join(isn_list[40:80])
@@ -530,19 +516,6 @@ class CartonSystemApp:
             "QRCode3": qr3_str,
             "QRCode4": qr4_str
             }
-        """
-        if has_both_sides:
-            data.update({
-                "S1QRCode1": ",".join(self.s1_isn_list[:40]),
-                "S1QRCode2": ",".join(self.s1_isn_list[40:80]),
-                "S1QRCode3": ",".join(self.s1_isn_list[80:120]),
-                "S1QRCode4": ",".join(self.s1_isn_list[120:160]),
-                "S2QRCode1": ",".join(self.s2_isn_list[:40]),
-                "S2QRCode2": ",".join(self.s2_isn_list[40:80]),
-                "S2QRCode3": ",".join(self.s2_isn_list[80:120]),
-                "S2QRCode4": ",".join(self.s2_isn_list[120:160]),
-            })
-        """
         with open(json_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -557,8 +530,8 @@ class CartonSystemApp:
         archive_filepath = os.path.join(json_folder, archive_filename)
         
         has_both_sides = bool(self.s1_isn_list and self.s2_isn_list)
-        # 單一工單且只有一側時維持舊格式；S1/S2 成對資料固定分組。
-        if len(self.work_order_set) == 1 and not has_both_sides:
+        # 僅有一側時維持舊格式；S1/S2 成對資料固定分組。
+        if not has_both_sides:
             isn_list = self.s1_isn_list + self.s2_isn_list
             qr1_str = ",".join(isn_list[:40])
             qr2_str = ",".join(isn_list[40:80])
@@ -581,19 +554,6 @@ class CartonSystemApp:
             "QRCode3": qr3_str,
             "QRCode4": qr4_str
         }
-        """
-        if has_both_sides:
-            data.update({
-                "S1QRCode1": ",".join(self.s1_isn_list[:40]),
-                "S1QRCode2": ",".join(self.s1_isn_list[40:80]),
-                "S1QRCode3": ",".join(self.s1_isn_list[80:120]),
-                "S1QRCode4": ",".join(self.s1_isn_list[120:160]),
-                "S2QRCode1": ",".join(self.s2_isn_list[:40]),
-                "S2QRCode2": ",".join(self.s2_isn_list[40:80]),
-                "S2QRCode3": ",".join(self.s2_isn_list[80:120]),
-                "S2QRCode4": ",".join(self.s2_isn_list[120:160]),
-            })
-        """
         
         try:
             with open(archive_filepath, 'w', encoding='utf-8') as f:
@@ -687,7 +647,6 @@ class CartonSystemApp:
                 'QRCode1', 'QRCode5', 'QRCode3', 'QRCode4',
             ):
                 data[key] = ''
-            data['WorkOrders'] = []
             with open(json_file, 'w', encoding='utf-8') as data_file:
                 json.dump(data, data_file, ensure_ascii=False, indent=2)
         except (OSError, json.JSONDecodeError) as error:
@@ -697,7 +656,6 @@ class CartonSystemApp:
         """流水號手動設為 1 時，清除目前箱內累計資料。"""
         self.s1_isn_list.clear()
         self.s2_isn_list.clear()
-        self.work_order_set.clear()
         self.carton_scanned_count = 0
         self.clear_label_data()
         self.log_message("流水號為 1，已清空目前箱內計數，從 1 開始")
