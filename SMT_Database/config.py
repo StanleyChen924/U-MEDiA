@@ -18,6 +18,7 @@ import pandas as pd
 INI_FILENAME = 'MySQLConfig.ini'
 SCAN_DIR = './ScanFolder'     # 要掃描的目錄
 BACKUP_DIR = './BackupFolder' # 讀取成功後的備份目錄
+FAIL_DIR = './FailFolder'     # 上拋失敗或二次確認失敗的檔案存放目錄
 LOG_FILENAME = f"./LOG/system_log{datetime.now().strftime('%Y%m%d')}.txt" # 記錄日誌的檔案名稱
 
 # 1. 宣告設定檔讀取器
@@ -32,15 +33,16 @@ else:
     config['PATH'] = {
         'SCAN_DIR': './ScanFolder',
         'BACKUP_DIR': './BackupFolder',
+        'FAIL_DIR': './FailFolder',
         'LOG_FILENAME': LOG_FILENAME
     }
     with open(config_file_path, 'w', encoding='utf-8') as configfile:
         config.write(configfile)
 
 # 3. 從 config.ini 中讀取路徑
-# 使用 .get('區段名稱', '設定鍵名稱')，並加上 .strip() 移除多餘空格
 SCAN_DIR = config.get('PATH', 'SCAN_DIR').strip()
 BACKUP_DIR = config.get('PATH', 'BACKUP_DIR').strip()
+FAIL_DIR = config.get('PATH', 'FAIL_DIR', fallback='./FailFolder').strip()
 
 # 4. 自動防呆：如果資料夾不存在，就自動建立它，避免程式崩潰
 if not os.path.exists(SCAN_DIR):
@@ -50,11 +52,15 @@ if not os.path.exists(SCAN_DIR):
 if not os.path.exists(BACKUP_DIR):
     os.makedirs(BACKUP_DIR)
 
-os.makedirs(os.path.dirname(LOG_FILENAME), exist_ok=True)
+if not os.path.exists(FAIL_DIR):
+    os.makedirs(FAIL_DIR)
+    print(f"📁 偵測到失敗資料夾不存在，已自動建立: {FAIL_DIR}")
 
-# 自動建立掃描與備份所需的資料夾
+# 自動建立掃描、備份、失敗所需的資料夾
 os.makedirs(SCAN_DIR, exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
+os.makedirs(FAIL_DIR, exist_ok=True)
+os.makedirs(os.path.dirname(LOG_FILENAME), exist_ok=True)
 
 # 全局變數：用於在背景執行緒與 UI 文字方塊之間傳遞訊息
 monitor_text_area = None
@@ -148,6 +154,27 @@ def mysql_safe_identifier(name, field_name="identifier"):
     if not re.fullmatch(r"[A-Za-z0-9_]+", value):
         raise ValueError(f"{field_name} 含有非法字元：{name}")
     return value
+
+
+def move_to_fail_folder(file_name, reason):
+    """將失敗檔案移至 FailFolder，避免放進 BackupFolder。"""
+    os.makedirs(FAIL_DIR, exist_ok=True)
+    src = os.path.join(SCAN_DIR, file_name)
+    dest = os.path.join(FAIL_DIR, file_name)
+
+    if os.path.exists(dest):
+        base, ext = os.path.splitext(file_name)
+        timestamp = datetime.now().strftime("%H%M%S")
+        dest = os.path.join(FAIL_DIR, f"{base}_{timestamp}{ext}")
+
+    try:
+        if os.path.exists(src):
+            shutil.move(src, dest)
+        log_and_display(f"[失敗轉移][檔案={file_name}][原因={reason}][目錄={FAIL_DIR}]")
+        return True
+    except Exception as e:
+        log_and_display(f"[失敗轉移失敗][檔案={file_name}][原因={reason}][錯誤={e}]")
+        return False
 
 
 def log_and_display(message):
@@ -434,8 +461,6 @@ def upload_to_mysql(sn_param, file_datetime, Side, status, cfg, MySQL_Job, panel
             MySQL_InsertFlag = int(cfg['setting'].get('MySQL_InsertFlag', 0))
 
             with conn.cursor() as cursor:
-                full_string = ""
-
                 if MySQL_InsertFlag == 1:
                     sql = (
                         f"INSERT INTO `{MySQL_TYPE}` "
@@ -452,7 +477,7 @@ def upload_to_mysql(sn_param, file_datetime, Side, status, cfg, MySQL_Job, panel
                     sql = (
                         f"UPDATE `{MySQL_TYPE}` SET "
                         "SMT_PN=%s, PANEL_SN=%s, "
-                        f"`{TableDetailStr}`=101 {full_string} "
+                        f"`{TableDetailStr}`=101 "
                         "WHERE iSN = %s"
                     )
                     cursor.execute(sql, (MySQL_Job, panel_no, sn_param))
@@ -547,7 +572,6 @@ def upload_to_mysql(sn_param, file_datetime, Side, status, cfg, MySQL_Job, panel
 
 
 def scan_folder_loop():
-    # 1. 先讀取所有的 Excel 檔案建立 BUFF
     while True:
         try:
             current_cfg = load_config()
@@ -559,14 +583,12 @@ def scan_folder_loop():
 
                     # 使用獨立 try-except 隔離單一檔案錯誤，避免整個迴圈中斷
                     try:
-                        # 1. 解析檔名（假設格式：機型_工單_PANELNO_狀態_面別_時間.xlsx，請依實際情況微調索引）
                         result = file_name.split('_')
 
                         # 安全防呆：確保檔名資訊完整，避免 IndexError
                         if len(result) < 5:
                             log_and_display(f"⚠️ 檔案 [{file_name}] 名稱格式不符，跳過處理。")
-                            # 仍將錯誤檔名搬移，避免卡在掃描區
-                            shutil.move(file_path, os.path.join(BACKUP_DIR, f"ERR_NAME_{file_name}"))
+                            move_to_fail_folder(file_name, "檔名格式不符")
                             continue
 
                         Station = result[0]
@@ -577,7 +599,6 @@ def scan_folder_loop():
                         target_field = result[-2]
                         Side = target_field[-1]
 
-                        # 2. 處理時間欄位防呆（假設時間在 result[5]，請根據您真實的檔名位置修改索引數字）
                         time_part = os.path.splitext(result[-1])[0].strip().upper()
 
                         if time_part == 'NONE' or time_part == '':
@@ -591,45 +612,56 @@ def scan_folder_loop():
                                 file_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                 log_and_display(f"⚠️ 檔案 [{file_name}] 時間格式錯誤，自動代入目前系統時間。")
 
-                        # 3. 透過 PANEL_NO 到 Excel 緩衝區 (data_buffer) 比對找出 序號(SN)
                         df_res = find_sn_by_panel_df(panel_no, data_buffer, BSN)
 
-                        # 明確排除 FAIL 狀態，其餘狀態皆可上拋
                         if status.upper() == "FAIL":
                             log_and_display(f"ℹ️ 檔案 [{file_name}] 狀態為 FAIL，跳過上拋資料庫。")
-                        else:
-                            if df_res is not None and not df_res.empty:
-                                log_and_display(f" PANEL_NO [{panel_no}] 比對成功，找到 {len(df_res)} 筆對應的 SN 資料，開始逐筆上拋...")
+                            move_to_fail_folder(file_name, "狀態為 FAIL")
+                            continue
 
-                                # 4. 走訪比對到的每一筆資料，將資料全部上拋到資料庫
-                                for _, row in df_res.iterrows():
-                                    actual_sn = str(row['序號(SN)']).strip()
-                                    work_order = result[1]
-                                    MySQL_Job = work_order
-                                    success = upload_to_mysql(actual_sn, file_dt, Side, status, current_cfg, MySQL_Job, panel_no, file_name, ModelName)
+                        if df_res is None or df_res.empty:
+                            log_and_display(f"⚠️ 比對失敗：在 Excel 緩衝區中找不到 PANEL_NO [{panel_no}] 的任何資料，此檔案不上拋。")
+                            move_to_fail_folder(file_name, "PANEL_NO 比對失敗")
+                            continue
 
-                                    if success:
-                                        log_and_display(f"  └─ 成功: PANEL [{panel_no}] -> 轉出 SN: {actual_sn} 上拋成功")
-                                    else:
-                                        log_and_display(f"  └─ 失敗: PANEL [{panel_no}] -> 轉出 SN: {actual_sn} 上拋失敗")
+                        log_and_display(f" PANEL_NO [{panel_no}] 比對成功，找到 {len(df_res)} 筆對應的 SN 資料，開始逐筆上拋...")
+
+                        has_success = False
+                        for _, row in df_res.iterrows():
+                            actual_sn = str(row['序號(SN)']).strip()
+                            work_order = result[1]
+                            MySQL_Job = work_order
+                            success = upload_to_mysql(actual_sn, file_dt, Side, status, current_cfg, MySQL_Job, panel_no, file_name, ModelName)
+
+                            if success:
+                                has_success = True
+                                log_and_display(f"  └─ 成功: PANEL [{panel_no}] -> 轉出 SN: {actual_sn} 上拋成功")
                             else:
-                                log_and_display(f"⚠️ 比對失敗：在 Excel 緩衝區中找不到 PANEL_NO [{panel_no}] 的任何資料，此檔案不上拋。")
+                                log_and_display(f"  └─ 失敗: PANEL [{panel_no}] -> 轉出 SN: {actual_sn} 上拋失敗")
+
+                        if not has_success:
+                            move_to_fail_folder(file_name, "所有 SN 上拋皆失敗")
+                            continue
 
                     except Exception as file_e:
                         log_and_display(f"⚠️ 處理個別檔案 {file_name} 時發生異常: {file_e}")
+                        try:
+                            move_to_fail_folder(file_name, f"處理異常: {file_e}")
+                        except Exception:
+                            pass
 
-                    # 5. 無論上拋成功與否（或沒比對到），皆搬移檔案至備份目錄，保持目錄清空
-                    dest_path = os.path.join(BACKUP_DIR, file_name)
+                    # 5. 若成功上拋，移到 BackupFolder；若失敗已經在上層處理過，此處只處理成功檔案
+                    if os.path.exists(file_path):
+                        dest_path = os.path.join(BACKUP_DIR, file_name)
+                        if os.path.exists(dest_path):
+                            base, ext = os.path.splitext(file_name)
+                            timestamp = datetime.now().strftime("%H%M%S")
+                            dest_path = os.path.join(BACKUP_DIR, f"{base}_{timestamp}{ext}")
+                        try:
+                            shutil.move(file_path, dest_path)
+                        except Exception as move_e:
+                            log_and_display(f"搬移檔案 {file_name} 失敗: {move_e}")
 
-                    if os.path.exists(dest_path):
-                        base, ext = os.path.splitext(file_name)
-                        timestamp = datetime.now().strftime("%H%M%S")
-                        dest_path = os.path.join(BACKUP_DIR, f"{base}_{timestamp}{ext}")
-
-                    try:
-                        shutil.move(file_path, dest_path)
-                    except Exception as move_e:
-                        log_and_display(f"搬移檔案 {file_name} 失敗: {move_e}")
             else:
                 # 減少日誌噪音
                 pass
