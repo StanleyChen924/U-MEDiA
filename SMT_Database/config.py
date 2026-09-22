@@ -11,10 +11,13 @@ from tkinter import messagebox, scrolledtext
 
 import pandas as pd
 
-
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Use paths relative to this script, not the process working directory. This is
 # important when the program is started by a shortcut or packaged as an EXE.
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INI_FILENAME = os.path.join(BASE_DIR, 'MySQLConfig.ini')
 CONFIG_FILENAME = os.path.join(BASE_DIR, 'config.ini')
 TODAY = datetime.now().strftime('%Y%m%d')
@@ -258,6 +261,7 @@ def upload_to_mysql(sn, file_dt, side, status, cfg, job, panel, file_name, model
 
 
 def scan_folder_loop():
+    log_and_display(f'掃描服務啟動，BASE_DIR={BASE_DIR}, SCAN_DIR={SCAN_DIR}')
     while True:
         try:
             cfg = load_config()
