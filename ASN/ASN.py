@@ -163,7 +163,7 @@ def execute_export():
         if qty_per_carton <= 0:
             raise ValueError
     except ValueError:
-        messagebox.showwarning("輸入錯誤", "每個 CARTON 的數量必須為大於 0 的整數！")
+        messagebox.showwarning("輸入錯誤", "每箱數量必須為大於 0 的整數！")
         return
 
     try:
@@ -171,7 +171,7 @@ def execute_export():
         if cartons_per_pallet <= 0:
             raise ValueError
     except ValueError:
-        messagebox.showwarning("輸入錯誤", "每個 PALLET 的 CARTON 數必須為大於 0 的整數！")
+        messagebox.showwarning("輸入錯誤", "每棧板箱數必須為大於 0 的整數！")
         return
 
     connection = None
@@ -265,11 +265,12 @@ frame = ttk.Frame(root, padding="20")
 frame.pack(fill=tk.BOTH, expand=True)
 tk.Label(frame, text="工單資料 Excel 匯出系統", font=("Microsoft JhengHei", 14, "bold")).pack(pady=(0, 10))
 
+# ModelName 移到工單號碼上方，方便先選擇產品型號。
+combo_model = input_row("ModelName：", widget_type="combo", values=model_choices)
 entry_wo = input_row("請輸入工單號碼：", load_last_work_order() or "WOTQ7553D")
 entry_po = input_row("請輸入 PO 號碼：")
-combo_model = input_row("ModelName：", widget_type="combo", values=model_choices)
-entry_qty_per_carton = input_row("幾個一 CARTON：", "1")
-entry_cartons_per_pallet = input_row("幾 CARTON 一個 PALLET：", "2")
+entry_qty_per_carton = input_row("每箱數量：", "1")
+entry_cartons_per_pallet = input_row("每棧板箱數：", "2")
 entry_complete_time = input_row("COMPLETE_TIME：")
 entry_relation_order = input_row("RELATION_ORDER：")
 entry_cs_shipping_notice = input_row("CS出貨通知：")
@@ -282,7 +283,7 @@ label_status.pack(pady=5)
 ttk.Button(frame, text="開始查詢並匯出 Excel", command=execute_export).pack(fill=tk.X, ipady=5)
 
 entries = [
-    entry_wo, entry_po, combo_model, entry_qty_per_carton,
+    combo_model, entry_wo, entry_po, entry_qty_per_carton,
     entry_cartons_per_pallet, entry_complete_time, entry_relation_order,
     entry_cs_shipping_notice, entry_product_part_no, entry_shipping_date,
     entry_pallet,
@@ -290,5 +291,5 @@ entries = [
 for current, next_widget in zip(entries, entries[1:]):
     current.bind("<Return>", lambda event, widget=next_widget: focus_next(widget))
 entries[-1].bind("<Return>", lambda event: execute_export())
-entry_wo.focus_set()
+combo_model.focus_set()
 root.mainloop()
