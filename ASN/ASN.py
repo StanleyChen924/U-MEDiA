@@ -144,6 +144,7 @@ def execute_export():
     work_order = entry_wo.get().strip()
     save_last_work_order(work_order)
     model_name = combo_model.get().strip()
+    total_qty_text = entry_total_qty.get().strip()
     qty_per_carton_text = entry_qty_per_carton.get().strip()
     cartons_per_pallet_text = entry_cartons_per_pallet.get().strip()
     input_po = entry_po.get().strip()
@@ -156,6 +157,14 @@ def execute_export():
 
     if not work_order:
         messagebox.showwarning("警告", "請輸入工單號碼！")
+        return
+
+    try:
+        total_qty = int(total_qty_text) if total_qty_text else 0
+        if total_qty < 0:
+            raise ValueError
+    except ValueError:
+        messagebox.showwarning("輸入錯誤", "QTY 總數量必須為大於或等於 0 的整數！")
         return
 
     try:
@@ -197,6 +206,22 @@ def execute_export():
             messagebox.showinfo("提示", "找不到符合條件且 CARTON_NO 有值的資料。")
             return
 
+        if total_qty > 0:
+            if total_qty % qty_per_carton == 0:
+                expected_cartons = total_qty // qty_per_carton
+                if len(df) > expected_cartons:
+                    df = df.head(expected_cartons).copy()
+                elif len(df) < expected_cartons:
+                    messagebox.showwarning(
+                        "提醒",
+                        "資料庫查到的 CARTON 筆數不足，已依實際資料筆數匯出。",
+                    )
+            else:
+                messagebox.showwarning(
+                    "提醒",
+                    "QTY 總數量不是每箱數量的整數倍，已按實際資料筆數匯出。",
+                )
+
         # 每一筆資料代表一個 CARTON；QTY 是每個 CARTON 的數量。
         df["QTY"] = qty_per_carton
         overrides = {
@@ -217,7 +242,6 @@ def execute_export():
             for index, value in enumerate(df["PALLET_NO"])
         ]
 
-        # 固定依 DB_COLUMNS 順序輸出全部欄位，空值輸出為空白儲存格。
         output = df.reindex(columns=DB_COLUMNS).fillna("")
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         output_path = OUTPUT_DIR / f"{work_order}_{datetime.now():%Y%m%d}.xlsx"
@@ -265,9 +289,9 @@ frame = ttk.Frame(root, padding="20")
 frame.pack(fill=tk.BOTH, expand=True)
 tk.Label(frame, text="工單資料 Excel 匯出系統", font=("Microsoft JhengHei", 14, "bold")).pack(pady=(0, 10))
 
-# ModelName 移到工單號碼上方，方便先選擇產品型號。
 combo_model = input_row("ModelName：", widget_type="combo", values=model_choices)
 entry_wo = input_row("請輸入工單號碼：", load_last_work_order() or "WOTQ7553D")
+entry_total_qty = input_row("QTY 總數量：", "1")
 entry_po = input_row("請輸入 PO 號碼：")
 entry_qty_per_carton = input_row("每箱數量：", "1")
 entry_cartons_per_pallet = input_row("每棧板箱數：", "2")
@@ -283,7 +307,7 @@ label_status.pack(pady=5)
 ttk.Button(frame, text="開始查詢並匯出 Excel", command=execute_export).pack(fill=tk.X, ipady=5)
 
 entries = [
-    combo_model, entry_wo, entry_po, entry_qty_per_carton,
+    combo_model, entry_wo, entry_total_qty, entry_po, entry_qty_per_carton,
     entry_cartons_per_pallet, entry_complete_time, entry_relation_order,
     entry_cs_shipping_notice, entry_product_part_no, entry_shipping_date,
     entry_pallet,
