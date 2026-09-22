@@ -2,7 +2,6 @@ import configparser
 from datetime import datetime
 import pathlib
 import re
-import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -23,7 +22,6 @@ DB_COLUMNS = [
     "Shipping_Date", "PO",
 ]
 
-# Template headings may use either of these names.
 ALIASES = {
     "MODELNAME": "MODEL_NAME",
     "MODEL_NAME": "MODEL_NAME",
@@ -53,20 +51,17 @@ def load_last_work_order():
     config = configparser.ConfigParser()
     try:
         config.read(LAST_WORK_ORDER_FILE, encoding="utf-8")
-        if config.has_section("settings"):
-            return config.get("settings", "last_work_order", fallback="")
+        return config.get("settings", "last_work_order", fallback="")
     except Exception:
         return ""
-    return ""
 
 
 def save_last_work_order(work_order):
-    if not work_order:
-        return
-    config = configparser.ConfigParser()
-    config["settings"] = {"last_work_order": work_order}
-    with LAST_WORK_ORDER_FILE.open("w", encoding="utf-8") as handle:
-        config.write(handle)
+    if work_order:
+        config = configparser.ConfigParser()
+        config["settings"] = {"last_work_order": work_order}
+        with LAST_WORK_ORDER_FILE.open("w", encoding="utf-8") as handle:
+            config.write(handle)
 
 
 def increment_pallet_no(base_str, increment_by):
@@ -94,14 +89,6 @@ def find_template():
 
 
 def read_template_definition():
-    """Return template headings, v-selected headings, and ModelName choices.
-
-    The shipping-list workbook is intentionally treated as a template: a cell
-    containing v marks the column that should be exported.  The heading is
-    taken from the same row or the closest non-empty cell above it.  This also
-    works with the common layout where headings are on row 2 and data starts on
-    row 3.
-    """
     template = find_template()
     if not template:
         return DB_COLUMNS[:], DB_COLUMNS[:], []
@@ -130,14 +117,13 @@ def read_template_definition():
             headings[col] = normalise_heading(value)
 
     selected = []
-    # Usually v is in the row immediately below the headings. Search the
-    # header area so minor template row shifts do not break the export.
     for col, heading in headings.items():
-        marked = any(str(sheet.cell(row, col).value).strip().lower() == "v"
-                     for row in range(1, min(heading_row + 3, sheet.max_row + 1)))
+        marked = any(
+            str(sheet.cell(row, col).value).strip().lower() == "v"
+            for row in range(1, min(heading_row + 3, sheet.max_row + 1))
+        )
         if marked and heading in DB_COLUMNS and heading not in selected:
             selected.append(heading)
-
     if not selected:
         selected = [heading for heading in headings.values() if heading in DB_COLUMNS]
     if not selected:
@@ -156,11 +142,10 @@ def read_template_definition():
 
 def execute_export():
     work_order = entry_wo.get().strip()
-    if work_order:
-        save_last_work_order(work_order)
-
+    save_last_work_order(work_order)
     model_name = combo_model.get().strip()
-    qty_text = entry_qty.get().strip()
+    qty_per_carton_text = entry_qty_per_carton.get().strip()
+    cartons_per_pallet_text = entry_cartons_per_pallet.get().strip()
     input_po = entry_po.get().strip()
     input_complete_time = entry_complete_time.get().strip()
     input_relation_order = entry_relation_order.get().strip()
@@ -168,35 +153,43 @@ def execute_export():
     input_part_no = entry_product_part_no.get().strip()
     input_shipping_date = entry_shipping_date.get().strip()
     start_pallet = entry_pallet.get().strip()
-    cartons_text = entry_carton_count.get().strip()
 
     if not work_order:
         messagebox.showwarning("警告", "請輸入工單號碼！")
         return
+
     try:
-        requested_qty = int(qty_text)
-        if requested_qty <= 0:
+        qty_per_carton = int(qty_per_carton_text)
+        if qty_per_carton <= 0:
             raise ValueError
     except ValueError:
-        messagebox.showwarning("輸入錯誤", "QTY 必須為大於 0 的整數！")
+        messagebox.showwarning("輸入錯誤", "每個 CARTON 的數量必須為大於 0 的整數！")
         return
 
-    db_config = read_db_config()
-    select_fields = ", ".join(DB_COLUMNS)
-    sql = f"""SELECT {select_fields} FROM ASN_Log
-              WHERE WORK_ORDER = %s
-                AND CARTON_NO IS NOT NULL
-                AND TRIM(CARTON_NO) <> ''"""
-    params = [work_order]
-    if model_name:
-        sql += " AND MODEL_NAME = %s"
-        params.append(model_name)
-    sql += " ORDER BY CARTON_NO ASC"
+    try:
+        cartons_per_pallet = int(cartons_per_pallet_text)
+        if cartons_per_pallet <= 0:
+            raise ValueError
+    except ValueError:
+        messagebox.showwarning("輸入錯誤", "每個 PALLET 的 CARTON 數必須為大於 0 的整數！")
+        return
 
     connection = None
     try:
         label_status.config(text="狀態：正在查詢資料庫...", fg="blue")
         root.update_idletasks()
+        db_config = read_db_config()
+        select_fields = ", ".join(DB_COLUMNS)
+        sql = f"""SELECT {select_fields} FROM ASN_Log
+                  WHERE WORK_ORDER = %s
+                    AND CARTON_NO IS NOT NULL
+                    AND TRIM(CARTON_NO) <> ''"""
+        params = [work_order]
+        if model_name:
+            sql += " AND MODEL_NAME = %s"
+            params.append(model_name)
+        sql += " ORDER BY CARTON_NO ASC"
+
         connection = pymysql.connect(**db_config, charset="utf8")
         df = pd.read_sql(sql, connection, params=tuple(params))
         if df.empty:
@@ -204,36 +197,36 @@ def execute_export():
             messagebox.showinfo("提示", "找不到符合條件且 CARTON_NO 有值的資料。")
             return
 
-        # QTY is explicitly supplied by the operator and is written to every
-        # generated shipping-list row, rather than trusting the DB value.
-        df["QTY"] = requested_qty
+        # 每一筆資料代表一個 CARTON；QTY 是每個 CARTON 的數量。
+        df["QTY"] = qty_per_carton
         overrides = {
-            "PO": input_po, "COMPLETE_TIME": input_complete_time,
-            "RELATION_ORDER": input_relation_order, "DN_ITEM": input_dn_item,
-            "PART_NO": input_part_no, "Shipping_Date": input_shipping_date,
+            "PO": input_po,
+            "COMPLETE_TIME": input_complete_time,
+            "RELATION_ORDER": input_relation_order,
+            "DN_ITEM": input_dn_item,
+            "PART_NO": input_part_no,
+            "Shipping_Date": input_shipping_date,
         }
         for column, value in overrides.items():
             if value:
                 df[column] = value
 
-        if start_pallet and cartons_text:
-            try:
-                per_pallet = int(cartons_text)
-                if per_pallet <= 0:
-                    raise ValueError
-                df["PALLET_NO"] = [increment_pallet_no(start_pallet, i // per_pallet)
-                                    for i in range(len(df))]
-            except ValueError:
-                messagebox.showwarning("輸入錯誤", "幾個 CARTON 必須為大於 0 的整數，已保留資料庫棧板號。")
+        df["PALLET_NO"] = [
+            increment_pallet_no(start_pallet, index // cartons_per_pallet)
+            if start_pallet else value
+            for index, value in enumerate(df["PALLET_NO"])
+        ]
 
-        # Always export every DB column in the declared order.  Missing database
-        # values are written as empty cells instead of NaN/None values.
+        # 固定依 DB_COLUMNS 順序輸出全部欄位，空值輸出為空白儲存格。
         output = df.reindex(columns=DB_COLUMNS).fillna("")
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         output_path = OUTPUT_DIR / f"{work_order}_{datetime.now():%Y%m%d}.xlsx"
         output.to_excel(output_path, index=False, engine="openpyxl")
         label_status.config(text="狀態：匯出成功！", fg="green")
-        messagebox.showinfo("成功", f"檔案匯出成功！\n檔案位置：{output_path}\n共 {len(output)} 筆資料。")
+        messagebox.showinfo(
+            "成功",
+            f"檔案匯出成功！\n檔案位置：{output_path}\n共 {len(output)} 筆資料。",
+        )
     except pymysql.MySQLError as exc:
         label_status.config(text="狀態：資料庫錯誤", fg="red")
         messagebox.showerror("資料庫錯誤", f"操作失敗：\n{exc}")
@@ -249,25 +242,10 @@ def focus_next(widget):
     widget.focus_set()
 
 
-def remember_work_order(event=None):
-    save_last_work_order(entry_wo.get().strip())
-
-
-selected_columns, _, model_choices = read_template_definition()
-root = tk.Tk()
-root.title("ASN Log 資料匯出工具")
-root.geometry("520x650")
-root.resizable(False, False)
-frame = ttk.Frame(root, padding="20")
-frame.pack(fill=tk.BOTH, expand=True)
-
-tk.Label(frame, text="工單資料 Excel 匯出系統", font=("Microsoft JhengHei", 14, "bold")).pack(pady=(0, 10))
-
-
 def input_row(label, default="", widget_type="entry", values=()):
     row = ttk.Frame(frame)
     row.pack(fill=tk.X, pady=3)
-    tk.Label(row, text=label, font=("Microsoft JhengHei", 10), width=18, anchor="w").pack(side=tk.LEFT)
+    tk.Label(row, text=label, font=("Microsoft JhengHei", 10), width=22, anchor="w").pack(side=tk.LEFT)
     if widget_type == "combo":
         widget = ttk.Combobox(row, values=values, font=("Microsoft JhengHei", 10))
     else:
@@ -278,28 +256,37 @@ def input_row(label, default="", widget_type="entry", values=()):
     return widget
 
 
+selected_columns, _, model_choices = read_template_definition()
+root = tk.Tk()
+root.title("ASN Log 資料匯出工具")
+root.geometry("560x680")
+root.resizable(False, False)
+frame = ttk.Frame(root, padding="20")
+frame.pack(fill=tk.BOTH, expand=True)
+tk.Label(frame, text="工單資料 Excel 匯出系統", font=("Microsoft JhengHei", 14, "bold")).pack(pady=(0, 10))
+
 entry_wo = input_row("請輸入工單號碼：", load_last_work_order() or "WOTQ7553D")
 entry_po = input_row("請輸入 PO 號碼：")
 combo_model = input_row("ModelName：", widget_type="combo", values=model_choices)
-entry_qty = input_row("QTY（產生數量）：", "1")
+entry_qty_per_carton = input_row("幾個一 CARTON：", "1")
+entry_cartons_per_pallet = input_row("幾 CARTON 一個 PALLET：", "2")
 entry_complete_time = input_row("COMPLETE_TIME：")
 entry_relation_order = input_row("RELATION_ORDER：")
 entry_cs_shipping_notice = input_row("CS出貨通知：")
 entry_product_part_no = input_row("成品料號：")
 entry_shipping_date = input_row("Shipping_Date：")
 entry_pallet = input_row("PALLET_NO 起始值：", "PL001")
-entry_carton_count = input_row("幾個 CARTON 換棧板：", "2")
-
-entry_wo.bind("<FocusOut>", remember_work_order)
-entry_wo.bind("<Return>", lambda event: (save_last_work_order(entry_wo.get().strip()), execute_export()))
 
 label_status = tk.Label(frame, text="狀態：準備就緒", font=("Microsoft JhengHei", 9), fg="gray")
 label_status.pack(pady=5)
 ttk.Button(frame, text="開始查詢並匯出 Excel", command=execute_export).pack(fill=tk.X, ipady=5)
 
-entries = [entry_wo, entry_po, combo_model, entry_qty, entry_complete_time,
-           entry_relation_order, entry_cs_shipping_notice, entry_product_part_no,
-           entry_shipping_date, entry_pallet, entry_carton_count]
+entries = [
+    entry_wo, entry_po, combo_model, entry_qty_per_carton,
+    entry_cartons_per_pallet, entry_complete_time, entry_relation_order,
+    entry_cs_shipping_notice, entry_product_part_no, entry_shipping_date,
+    entry_pallet,
+]
 for current, next_widget in zip(entries, entries[1:]):
     current.bind("<Return>", lambda event, widget=next_widget: focus_next(widget))
 entries[-1].bind("<Return>", lambda event: execute_export())
