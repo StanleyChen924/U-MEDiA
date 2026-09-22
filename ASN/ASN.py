@@ -160,11 +160,11 @@ def execute_export():
         return
 
     try:
-        total_qty = int(total_qty_text) if total_qty_text else 0
-        if total_qty < 0:
+        total_qty = int(total_qty_text)
+        if total_qty <= 0:
             raise ValueError
     except ValueError:
-        messagebox.showwarning("輸入錯誤", "QTY 總數量必須為大於或等於 0 的整數！")
+        messagebox.showwarning("輸入錯誤", "QTY 總數量必須為大於 0 的整數！")
         return
 
     try:
@@ -206,24 +206,24 @@ def execute_export():
             messagebox.showinfo("提示", "找不到符合條件且 CARTON_NO 有值的資料。")
             return
 
-        if total_qty > 0:
-            if total_qty % qty_per_carton == 0:
-                expected_cartons = total_qty // qty_per_carton
-                if len(df) > expected_cartons:
-                    df = df.head(expected_cartons).copy()
-                elif len(df) < expected_cartons:
-                    messagebox.showwarning(
-                        "提醒",
-                        "資料庫查到的 CARTON 筆數不足，已依實際資料筆數匯出。",
-                    )
-            else:
+        if total_qty % qty_per_carton == 0:
+            expected_cartons = total_qty // qty_per_carton
+            if len(df) > expected_cartons:
+                df = df.head(expected_cartons).copy()
+            elif len(df) < expected_cartons:
                 messagebox.showwarning(
                     "提醒",
-                    "QTY 總數量不是每箱數量的整數倍，已按實際資料筆數匯出。",
+                    "資料庫查到的 CARTON 筆數不足，已依實際資料筆數匯出。",
                 )
+        else:
+            messagebox.showwarning(
+                "提醒",
+                "QTY 總數量不是每箱數量的整數倍，已按實際資料筆數匯出。",
+            )
 
-        # 每一筆資料代表一個 CARTON；QTY 是每個 CARTON 的數量。
-        df["QTY"] = qty_per_carton
+        # QTY 代表本次所有出貨的總數量，不是單一 CARTON 的數量。
+        # 因此每一筆匯出資料的 QTY 都填入相同的出貨總數量。
+        df["QTY"] = total_qty
         overrides = {
             "PO": input_po,
             "COMPLETE_TIME": input_complete_time,
