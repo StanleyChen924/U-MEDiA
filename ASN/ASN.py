@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 
 
 BASE_DIR = pathlib.Path(__file__).resolve().parent
+OUTPUT_DIR = BASE_DIR / "ASNFile"
 TEMPLATE_PATTERN = "*shipping list.xlsx"
 
 DB_COLUMNS = [
@@ -154,7 +155,6 @@ def execute_export():
         messagebox.showwarning("輸入錯誤", "QTY 必須為大於 0 的整數！")
         return
 
-    export_columns, _, _ = read_template_definition()
     db_config = read_db_config()
     select_fields = ", ".join(DB_COLUMNS)
     sql = f"""SELECT {select_fields} FROM ASN_Log
@@ -200,11 +200,14 @@ def execute_export():
             except ValueError:
                 messagebox.showwarning("輸入錯誤", "幾個 CARTON 必須為大於 0 的整數，已保留資料庫棧板號。")
 
-        output = df[[column for column in export_columns if column in df.columns]].copy()
-        file_name = f"{work_order}_{datetime.now():%Y%m%d}.xlsx"
-        output.to_excel(file_name, index=False, engine="openpyxl")
+        # Always export every DB column in the declared order.  Missing database
+        # values are written as empty cells instead of NaN/None values.
+        output = df.reindex(columns=DB_COLUMNS).fillna("")
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        output_path = OUTPUT_DIR / f"{work_order}_{datetime.now():%Y%m%d}.xlsx"
+        output.to_excel(output_path, index=False, engine="openpyxl")
         label_status.config(text="狀態：匯出成功！", fg="green")
-        messagebox.showinfo("成功", f"檔案匯出成功！\n檔名：{file_name}\n共 {len(output)} 筆資料。")
+        messagebox.showinfo("成功", f"檔案匯出成功！\n檔案位置：{output_path}\n共 {len(output)} 筆資料。")
     except pymysql.MySQLError as exc:
         label_status.config(text="狀態：資料庫錯誤", fg="red")
         messagebox.showerror("資料庫錯誤", f"操作失敗：\n{exc}")
