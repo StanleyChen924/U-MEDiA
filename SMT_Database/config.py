@@ -8,7 +8,7 @@ import time
 import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, scrolledtext
-
+import sys
 import pandas as pd
 
 if getattr(sys, 'frozen', False):
@@ -247,7 +247,7 @@ def upload_to_mysql(sn, file_dt, side, status, cfg, job, panel, file_name, model
         conn = None
         try:
             import pymysql
-            conn = pymysql.connect(host=cfg['setting'].get('MySQL_ServerIP'), user=cfg['setting'].get('MySQL_username'), password=cfg['setting'].get('MySQL_Password'), database=cfg['setting'].get('MySQL_Database'), port=cfg['setting'].getint('MySQL_Port', 3306), charset='utf8mb4', autocommit=False)
+            conn = pymysql.connect(host=cfg['setting'].get('MySQL_ServerIP'), user=cfg['setting'].get('MySQL_username'), password=cfg['setting'].get('MySQL_Password'), database=cfg['setting'].get('MySQL_Database'), port=cfg['setting'].getint('MySQL_Port', 3306), charset='utf8', autocommit=False)
             with conn.cursor() as cursor:
                 if cfg['setting'].getint('MySQL_InsertFlag', 0) == 1:
                     cursor.execute(f'INSERT INTO `{table}` SET iSN=%s, SMT_PN=%s, PANEL_SN=%s, `{detail}`=101 ON DUPLICATE KEY UPDATE SMT_PN=%s, PANEL_SN=%s', (sn, job, panel, job, panel))
