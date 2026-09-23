@@ -18,6 +18,7 @@ else:
 # Use paths relative to this script, not the process working directory. This is
 # important when the program is started by a shortcut or packaged as an EXE.
 # BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 INI_FILENAME = os.path.join(BASE_DIR, 'MySQLConfig.ini')
 CONFIG_FILENAME = os.path.join(BASE_DIR, 'config.ini')
 TODAY = datetime.now().strftime('%Y%m%d')
@@ -128,7 +129,8 @@ def _unique_path(directory, name):
     if not os.path.exists(path):
         return path
     stem, ext = os.path.splitext(name)
-    return os.path.join(directory, f'{stem}_{datetime.now():%Y%m%d_%H%M%S_%f}{ext}')
+    #return os.path.join(directory, f'{stem}_{datetime.now():%Y%m%d_%H%M%S_%f}{ext}')
+    return os.path.join(directory, f'{stem}{ext}')
 
 
 def move_to_fail_folder(file_name, reason):
@@ -247,7 +249,7 @@ def upload_to_mysql(sn, file_dt, side, status, cfg, job, panel, file_name, model
         conn = None
         try:
             import pymysql
-            conn = pymysql.connect(host=cfg['setting'].get('MySQL_ServerIP'), user=cfg['setting'].get('MySQL_username'), password=cfg['setting'].get('MySQL_Password'), database=cfg['setting'].get('MySQL_Database'), port=cfg['setting'].getint('MySQL_Port', 3306), charset='utf8', autocommit=False)
+            conn = pymysql.connect(host=cfg['setting'].get('MySQL_ServerIP'), user=cfg['setting'].get('MySQL_username'), password=cfg['setting'].get('MySQL_Password'), database=cfg['setting'].get('MySQL_DB'), port=cfg['setting'].getint('MySQL_Port', 3306), charset='utf8', autocommit=False)
             with conn.cursor() as cursor:
                 if cfg['setting'].getint('MySQL_InsertFlag', 0) == 1:
                     cursor.execute(f'INSERT INTO `{table}` SET iSN=%s, SMT_PN=%s, PANEL_SN=%s, `{detail}`=101 ON DUPLICATE KEY UPDATE SMT_PN=%s, PANEL_SN=%s', (sn, job, panel, job, panel))
@@ -280,10 +282,11 @@ def scan_folder_loop():
                 succeeded = False
                 try:
                     parts = file_name.split('_')
-                    if len(parts) < 6: raise ValueError('檔名格式不符，至少需要 6 個欄位')
+                    if len(parts) < 7: raise ValueError('檔名格式不符，至少需要 6 個欄位')
                     panel, status, bsn = parts[2].strip(), parts[3].strip(), parts[4].strip()
-                    model, side = parts[5][:-1], parts[-2][-1:].upper()
-                    stamp = os.path.splitext(parts[-1])[0].strip().upper()
+                    model, side = parts[5][:-1], parts[5][-1:].upper()
+                    stamp = os.path.splitext(parts[6])[0].strip().upper()
+                    #parts = raw_parts[:7]
                     try: file_dt = datetime.strptime(stamp, '%Y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S') if stamp and stamp != 'NONE' else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     except ValueError: file_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S'); log_and_display(f'時間格式錯誤: {file_name}', failure=True)
                     if status.upper() == 'FAIL': move_to_fail_folder(file_name, '狀態為 FAIL'); continue
