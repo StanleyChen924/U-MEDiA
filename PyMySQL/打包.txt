@@ -1,0 +1,91 @@
+打包。
+安裝一個pyinstaller
+
+pip install pyinstaller
+
+然後運行命令：
+
+pyinstaller -F -w test.py
+上面的指令會將print屏蔽掉
+
+pyinstaller -F test.py
+pyinstaller -F PyMySQL.py
+上面指令會將print輸出顯示
+
+pyinstaller -F --console test.py
+
+
+
+參數說明：
+-F 表示生成單個可執行檔
+-w 表示去掉主控台視窗，這在GUI介面時非常有用。 不過如果是命令列程式的話那就把這個選項刪除吧！
+-p 表示你自己自訂需要載入的類路徑，一般情況下用不到
+-i 表示可執行檔的圖示
+
+# -*- coding: cp950 -*-
+
+打包32bit
+
+打開 Anaconda Prompt (Miniconda2)
+
+
+set CONDA_FORCE_32BIT=1
+
+conda env list
+
+activate python36
+
+D:
+
+cd D:\Stanley\python\CR48NAUpgrade32bit
+
+pyinstaller --hidden-import=pyautogui,ConfigParser -F -w autorun.py
+
+
+pyinstaller --hidden-import=pyautogui,time,msvcrt -F -w autorun.py
+
+
+pyinstaller --noconsole --onefile 您的檔名.py
+
+(註：--noconsole 可在啟動程式時，自動隱藏背景黑色的 CMD 視窗)
+
+
+未來當你修改了電腦裡的檔案，想要同步更新到 GitHub，流程非常固定，只需簡單的三行指令：
+
+git add .                  # 1. 抓取這台電腦上所有修改過、新增加的檔案
+git commit -m "更新說明"    # 2. 本地打包成新版本（引號內寫這次改了什麼）
+git push                   # 3. 直接推送到 GitHub（因為之前設定過了，這次只需打 git push）
+
+3. 團隊協作：讓其他人下載 (Clone) 或共同編輯當你想跟同事或朋友一起開發這個專案時，可以透過以下方式合作：
+
+A. 讓其他人下載你的專案（Clone）任何人只要有你 GitHub 專案的網址，
+都可以把程式碼完整下載回去。請讓他們在自己的電腦終端機輸入：
+bashgit clone https://github.com
+請謹慎使用程式碼。(這樣他們電腦就會自動建立一個一模一樣的資料夾和所有歷史紀錄。)
+
+B. 共同編輯（邀請設定）如果下載你專案的人想要直接「Push」更新上傳到你的 GitHub 倉庫，
+你必須在網頁上賦予他們權限：進入你的 GitHub 專案網頁。點擊上方的 Settings（設定）。
+在左側選單點擊 Collaborators（協作者）。點擊 Add people 按鈕，輸入對方的 GitHub 帳號或 Email。
+對方收到 Email 邀請信並點擊接受後，他們就可以直接使用 git push 把代碼傳到你的倉庫了！
+
+# 警告：這會刪除 GitHub 上所有你本地沒有的提交紀錄
+git push origin main --force
+
+# 第一步：先將遠端變更拉下來合併（保持歷史紀錄乾淨）
+git pull origin main --rebase
+
+# 第二步：等上一步成功完成後，再重新推送
+git push origin main
+
+
+# 1. 暫存所有修改的檔案
+git add .
+
+# 2. 提交一個暫時的紀錄（訊息可自訂）
+git commit -m "Save local work before pull"
+
+# 3. 這時候就可以順利拉取遠端更新了
+git pull origin main --rebase
+
+# 4. 最後重新推送
+git push origin main
