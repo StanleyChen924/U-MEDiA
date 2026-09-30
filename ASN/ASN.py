@@ -209,8 +209,8 @@ def execute_export():
 
         expected_cartons = math.ceil(total_qty / qty_per_carton)
         if len(df) > expected_cartons:
-        # if df["CARTON_NO"].nunique():
-            df = df.head(expected_cartons).copy()
+            #df = df.head(expected_cartons).copy()
+            df = df.head(total_qty).copy()
         elif len(df) < expected_cartons:
             messagebox.showwarning(
                 "提醒",
