@@ -209,6 +209,7 @@ def execute_export():
 
         expected_cartons = math.ceil(total_qty / qty_per_carton)
         if len(df) > expected_cartons:
+        # if df["CARTON_NO"].nunique():
             df = df.head(expected_cartons).copy()
         elif len(df) < expected_cartons:
             messagebox.showwarning(
@@ -230,12 +231,25 @@ def execute_export():
         for column, value in overrides.items():
             if value:
                 df[column] = value
+        
+        # --- 修正後的棧板號碼計算邏輯 ---
+        if start_pallet:
+            pallet_mapping = {}
+            unique_cartons = df["CARTON_NO"].unique()
+            for carton_index, carton_no in enumerate(unique_cartons):
+                current_pallet_offset = carton_index // cartons_per_pallet
+                pallet_mapping[carton_no] = increment_pallet_no(start_pallet, current_pallet_offset)
+            df["PALLET_NO"] = df["CARTON_NO"].map(pallet_mapping)
+        # ---------------------------------
 
+        
+        """
         df["PALLET_NO"] = [
             increment_pallet_no(start_pallet, index // cartons_per_pallet)
             if start_pallet else value
             for index, value in enumerate(df["PALLET_NO"])
         ]
+        """
 
         output = df.reindex(columns=DB_COLUMNS).fillna("")
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
