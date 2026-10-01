@@ -11,6 +11,7 @@ from tkinter import messagebox, scrolledtext
 import sys
 import pandas as pd
 
+actual_sn=1111
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
 else:
@@ -229,6 +230,8 @@ def find_sn_by_panel_df(panel, buffer, bsn):
             value = row.get('序號(SN)')
             if pd.notna(value) and str(value).strip():
                 item = row.copy(); item['序號(SN)'] = str(value).strip(); rows.append(item)
+                global actual_sn
+                actual_sn = str(row['序號(SN)']).strip()
     try: index = int(str(bsn).strip())
     except (TypeError, ValueError): return pd.DataFrame()
     return pd.DataFrame(rows).iloc[[index - 1]].copy() if 0 < index <= len(rows) else pd.DataFrame()
@@ -245,30 +248,63 @@ def upload_to_mysql(sn, file_dt, side, status, cfg, job, panel, file_name, model
         detail = f'{base}_{side}'
     except ValueError as error:
         log_and_display(f'MySQL 表名設定錯誤: {error}', failure=True); return False
+    
     for attempt in range(1, 4):
         conn = None
         try:
             import pymysql
-            conn = pymysql.connect(host=cfg['setting'].get('MySQL_ServerIP'), user=cfg['setting'].get('MySQL_username'), password=cfg['setting'].get('MySQL_Password'), database=cfg['setting'].get('MySQL_DB'), port=cfg['setting'].getint('MySQL_Port', 3306), charset='utf8', autocommit=False)
+            conn = pymysql.connect(host=cfg['setting'].get('MySQL_ServerIP'), user=cfg['setting'].get('MySQL_username'), password=cfg['setting'].get('MySQL_Password'), database=cfg['setting'].get('MySQL_DB'), charset='utf8')
             with conn.cursor() as cursor:
                 if cfg['setting'].getint('MySQL_InsertFlag', 0) == 1:
-                    cursor.execute(f'INSERT INTO `{table}` SET iSN=%s, SMT_PN=%s, PANEL_SN=%s, `{detail}`=101 ON DUPLICATE KEY UPDATE SMT_PN=%s, PANEL_SN=%s', (sn, job, panel, job, panel))
+                    # 修改：先檢查記錄是否已存在，存在則先更新再插入
+                    cursor.execute(f'SELECT iSN FROM `{table}` WHERE iSN=%s LIMIT 1', (sn,))
+                    exists = cursor.fetchone() is not None
+                    
+                    if exists:
+                        # 記錄已存在，直接更新
+                        cursor.execute(f'UPDATE `{table}` SET SMT_PN=%s, PANEL_SN=%s, `{detail}`=101 WHERE iSN=%s', (job, panel, sn))
+                    else:
+                        # 記錄不存在，執行插入
+                        cursor.execute(f'INSERT INTO `{table}` (iSN, SMT_PN, PANEL_SN, `{detail}`) VALUES (%s, %s, %s, 101)', (sn, job, panel))
                 else:
                     cursor.execute(f'UPDATE `{table}` SET SMT_PN=%s, PANEL_SN=%s, `{detail}`=101 WHERE iSN=%s', (job, panel, sn))
-                cursor.execute(f'INSERT INTO `{detail}` SET iSN=%s, errorCode=%s, JobNum=%s, ModelName=%s, operator=%s, Station=%s, StartTime=%s, StopTime=%s, logfilename=%s, log=%s', (sn, status, job, model, cfg['setting'].get('MySQL_Operator'), cfg['setting'].get('MySQL_Station'), file_dt, file_dt, file_name, status))
+                
+                # 插入明細表
+                cursor.execute(f'INSERT INTO `{detail}` SET iSN=%s, errorCode=%s, JobNum=%s, ModelName=%s, operator=%s, Station=%s, StartTime=%s, StopTime=%s, logfilename=%s, log=%s', (sn, status, job, model, cfg['setting'].get('MySQL_Operator', ''), cfg['setting'].get('MySQL_Station', ''), file_dt, file_dt, file_name, ''))
+            
             conn.commit()
+            
+            # 修改：加強二次確認邏輯
             with conn.cursor() as cursor:
-                cursor.execute(f'SELECT `{detail}` FROM `{table}` WHERE iSN=%s', (sn,)); main_ok = str((cursor.fetchone() or [None])[0]) == '101'
-                cursor.execute(f'SELECT 1 FROM `{detail}` WHERE iSN=%s AND JobNum=%s AND logfilename=%s LIMIT 1', (sn, job, file_name)); detail_ok = cursor.fetchone() is not None
-            if main_ok and detail_ok: return True
-            log_and_display(f'[二次確認失敗][SN={sn}][PANEL={panel}][主表={main_ok}][明細表={detail_ok}]', failure=True); return False
+                # 檢查主表
+                cursor.execute(f'SELECT `{detail}` FROM `{table}` WHERE iSN=%s', (sn,))
+                main_result = cursor.fetchone()
+                main_ok = main_result is not None and str(main_result[0] or '') == '101'
+                
+                # 檢查明細表
+                cursor.execute(f'SELECT 1 FROM `{detail}` WHERE iSN=%s AND JobNum=%s LIMIT 1', (sn, job))
+                detail_ok = cursor.fetchone() is not None
+            
+            if main_ok and detail_ok:
+                log_and_display(f'[上拋成功][SN={sn}][PANEL={panel}][檔案={file_name}]')
+                global actual_sn
+                actual_sn = sn
+                return True
+            else:
+                log_and_display(f'[二次確認失敗][SN={sn}][PANEL={panel}][主表={main_ok}][明細表={detail_ok}]', failure=True)
+                if attempt < 3:
+                    time.sleep(1)
+                continue
+                
         except Exception as error:
             log_and_display(f'[DB寫入失敗][SN={sn}][第{attempt}/3次][錯誤={error}]', failure=True)
-            if attempt < 3: time.sleep(2)
+            if attempt < 3: 
+                time.sleep(2)
         finally:
             if conn is not None:
                 try: conn.close()
                 except Exception: pass
+    
     return False
 
 
@@ -286,7 +322,7 @@ def scan_folder_loop():
                     panel, status, bsn = parts[2].strip(), parts[3].strip(), parts[4].strip()
                     model, side = parts[5][:-1], parts[5][-1:].upper()
                     stamp = os.path.splitext(parts[6])[0].strip().upper()
-                    #parts = raw_parts[:7]
+                    #parts = raw_parts[:7]                    
                     try: file_dt = datetime.strptime(stamp, '%Y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S') if stamp and stamp != 'NONE' else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     except ValueError: file_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S'); log_and_display(f'時間格式錯誤: {file_name}', failure=True)
                     if status.upper() == 'FAIL': move_to_fail_folder(file_name, '狀態為 FAIL'); continue
@@ -298,7 +334,11 @@ def scan_folder_loop():
                     if not uploads or not all(uploads):
                         log_and_display(f'檔案 [{file_name}] 上拋失敗，移至 FailFolder。', failure=True)
                         move_to_fail_folder(file_name, '一筆或多筆 SN 上拋失敗'); continue
-                    succeeded = True
+                    succeeded = True                    
+                    if succeeded:
+                        log_and_display(f"  └─ 成功: PANEL [{panel}] -> 轉出 SN: {actual_sn} 上拋成功")
+                    else:
+                        log_and_display(f"  └─ 失敗: PANEL [{panel}] -> 轉出 SN: {actual_sn} 上拋失敗")
                 except Exception as error:
                     log_and_display(f'處理個別檔案 {file_name} 發生異常: {error}', failure=True)
                     move_to_fail_folder(file_name, f'處理異常: {error}')
