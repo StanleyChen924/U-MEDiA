@@ -73,7 +73,7 @@ monitor_text_area = None
 
 if not os.path.exists(INI_FILENAME):
     with open(INI_FILENAME, 'w', encoding='utf-8') as stream:
-        stream.write('''[SystemID]\nDevice_ID=0x0013\nVendor_ID=0x168C\nSSYS_ID=0x2051\nSSYS_VEND_ID=0x168C\n\n[setting]\nMySQL_FLAG=1\nMySQL_InsertFlag=1\nMySQL_BeforStation=and STA1 > 100\nTable[...]
+        stream.write('''[SystemID]\nDevice_ID=0x0013\nVendor_ID=0x168C\nSSYS_ID=0x2051\nSSYS_VEND_ID=0x168C\n\n[setting]\nMySQL_FLAG=1\nMySQL_InsertFlag=1\nMySQL_BeforStation=and STA1 > 100\nTableDetailStr=STA1\nMySQL_TYPE=CARD\n''')
 
 
 def load_config():
@@ -169,7 +169,23 @@ def normalize_column_name(value):
 def align_dataframe_columns(df):
     df = df.copy()
     df.columns = [str(column).strip() for column in df.columns]
-    aliases = {'工单号':'工單號','工單號':'工單號','工单':'工單號','工號':'工單號','workorder':'工單號','orderno':'工單號','job':'工單號','panelno':'PANEL_NO','pane[...]
+    # aliases = {'工单号':'工單號','工單號':'工單號','工单':'工單號','工號':'工單號','workorder':'工單號','orderno':'工單號','job':'工單號','panelno':'PANEL_NO','panel':'PANEL_NO','序號(SN)':'序號(SN)','併板主PNL':'併板主PNL','序號(S1SN)':'序號(S1SN)','序號(S2SN)':'序號(S2SN)'}
+    aliases = {
+        # 工單相關
+        '工单号': '工單號', '工單號': '工單號', '工单': '工單號', '工號': '工單號', 
+        'workorder': '工單號', 'orderno': '工單號', 'job': '工單號',
+    
+        # Panel 相關
+        'panelno': 'PANEL_NO', 'panel': 'PANEL_NO', '併板主PNL': '併板主PNL',
+    
+        # 序號相關
+        '序號(SN)': '序號(SN)', 
+        '序號(S1SN)': '序號(S1SN)', 
+        '序號(S2SN)': '序號(S2SN)', 
+        '序號(A SN)': '序號(A SN)', 
+        '序號(A1 SN)': '序號(A1 SN)', 
+        '序號(A2 SN)': '序號(A2 SN)'
+    }
     aliases = {normalize_column_name(k): v for k, v in aliases.items()}
     rename = {}
     for column in df.columns:
@@ -251,7 +267,7 @@ def upload_to_mysql(sn, file_dt, side, status, cfg, job, panel, file_name, model
         conn = None
         try:
             import pymysql
-            conn = pymysql.connect(host=cfg['setting'].get('MySQL_ServerIP'), user=cfg['setting'].get('MySQL_username'), password=cfg['setting'].get('MySQL_Password'), database=cfg['setting'].get[...]
+            conn = pymysql.connect(host=cfg['setting'].get('MySQL_ServerIP'), user=cfg['setting'].get('MySQL_username'), password=cfg['setting'].get('MySQL_Password'), database=cfg['setting'].get('MySQL_DB'), charset='utf8')
             with conn.cursor() as cursor:
                 if cfg['setting'].getint('MySQL_InsertFlag', 0) == 1:
                     # 修改：先檢查記錄是否已存在，存在則先更新再插入
@@ -268,7 +284,7 @@ def upload_to_mysql(sn, file_dt, side, status, cfg, job, panel, file_name, model
                     cursor.execute(f'UPDATE `{table}` SET SMT_PN=%s, PANEL_SN=%s, `{detail}`=101 WHERE iSN=%s', (job, panel, sn))
                 
                 # 插入明細表
-                cursor.execute(f'INSERT INTO `{detail}` SET iSN=%s, errorCode=%s, JobNum=%s, ModelName=%s, operator=%s, Station=%s, StartTime=%s, StopTime=%s, logfilename=%s, log=%s', (sn, status[...]
+                cursor.execute(f'INSERT INTO `{detail}` SET iSN=%s, errorCode=%s, JobNum=%s, ModelName=%s, operator=%s, Station=%s, StartTime=%s, StopTime=%s, logfilename=%s, log=%s', (sn, status, job, model, cfg['setting'].get('MySQL_Operator', ''), cfg['setting'].get('MySQL_Station', ''), file_dt, file_dt, file_name, ''))
             
             conn.commit()
             
@@ -379,5 +395,5 @@ if __name__ == '__main__':
     try:
         import pymysql
     except ImportError:
-        root = tk.Tk(); root.title('警告'); root.geometry('300x100'); tk.Label(root, text='警告：您未安裝 pymysql 模組，無法繼續執行。', fg='red').pack(pady=20); root.mainloop([...]
+        root = tk.Tk(); root.title('警告'); root.geometry('300x100'); tk.Label(root, text='警告：您未安裝 pymysql 模組，無法繼續執行。', fg='red').pack(pady=20); root.mainloop(); raise SystemExit
     create_setup_ui()
