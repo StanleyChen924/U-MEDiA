@@ -11,6 +11,10 @@ from tkinter import messagebox, scrolledtext
 import sys
 import pandas as pd
 
+
+# Version 1.0.0.0 2026-10-06, Modified by Stanley
+# excel 欄位不同by case 處理
+
 actual_sn=1111
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
@@ -130,8 +134,12 @@ def _unique_path(directory, name):
     if not os.path.exists(path):
         return path
     stem, ext = os.path.splitext(name)
-    #return os.path.join(directory, f'{stem}_{datetime.now():%Y%m%d_%H%M%S_%f}{ext}')
-    return os.path.join(directory, f'{stem}{ext}')
+    counter = 1
+    while True:
+        candidate = os.path.join(directory, f'{stem}_{counter}{ext}')
+        if not os.path.exists(candidate):
+            return candidate
+        counter += 1
 
 
 def move_to_fail_folder(file_name, reason):
@@ -179,11 +187,12 @@ def align_dataframe_columns(df):
         'panelno': 'PANEL_NO', 'panel': 'PANEL_NO', '併板主PNL': '併板主PNL',
     
         # 序號相關
-        '序號(SN)': '序號(SN)', 
-        '序號(S1SN)': '序號(S1SN)', 
-        '序號(S2SN)': '序號(S2SN)', 
-        '序號(A SN)': '序號(A SN)', 
-        '序號(A1 SN)': '序號(A1 SN)', 
+        '序號(SN)': '序號(SN)', 'S/N': '序號(SN)',
+        '序號(S1SN)': '序號(S1SN)', 'S1SN': '序號(S1SN)',
+        '序號(S2SN)': '序號(S2SN)', 'S2SN': '序號(S2SN)',
+        'SN1': '序號(S1SN)', 'SN2': '序號(S2SN)',
+        '序號(A SN)': '序號(A SN)',
+        '序號(A1 SN)': '序號(A1 SN)',
         '序號(A2 SN)': '序號(A2 SN)'
     }
     aliases = {normalize_column_name(k): v for k, v in aliases.items()}
@@ -198,14 +207,54 @@ def align_dataframe_columns(df):
     return df.rename(columns=rename)
 
 
+def normalize_excel_rows_by_case(df):
+    """依 Excel 欄位結構把不同版本資料展開為共用格式。"""
+    if df.shape[1] == 5 and 'PANEL_NO' in df.columns:
+        a_sn_columns = {'序號(A SN)', '序號(A1 SN)', '序號(A2 SN)'}
+        is_a_sn_format = a_sn_columns.issubset(df.columns)
+        expanded = []
+        for _, row in df.iterrows():
+            for position in range(2, 5):
+                value = row.iloc[position]
+                if pd.isna(value) or not str(value).strip():
+                    continue
+                item = row.copy()
+                item['序號(SN)'] = str(value).strip()
+                item['併板主PNL'] = row.get('併板主PNL', row.get('PANEL_NO'))
+                if is_a_sn_format:
+                    item['序號(A SN)'] = row.get('序號(A SN)')
+                    item['序號(A1 SN)'] = row.get('序號(A1 SN)')
+                    item['序號(A2 SN)'] = row.get('序號(A2 SN)')
+                expanded.append(item)
+        return pd.DataFrame(expanded) if expanded else df
+
+    if df.shape[1] == 4 and 'PANEL_NO' in df.columns and '序號(S1SN)' in df.columns and '序號(S2SN)' in df.columns:
+        expanded = []
+        for _, row in df.iterrows():
+            for column in ('序號(S1SN)', '序號(S2SN)'):
+                value = row.get(column)
+                if pd.isna(value) or not str(value).strip():
+                    continue
+                item = row.copy()
+                item['序號(SN)'] = str(value).strip()
+                item['併板主PNL'] = row.get('併板主PNL', row.get('PANEL_NO'))
+                expanded.append(item)
+        return pd.DataFrame(expanded) if expanded else df
+
+    return df
+
+
 def load_all_excel_files():
     columns = ['工單號', 'PANEL_NO', '序號(SN)', '併板主PNL', '序號(S1SN)', '序號(S2SN)']
     two_column_panel_sources = {'序號(SN)', '併板主PNL', '序號(S1SN)', '序號(S2SN)'}
     frames = []
     for path in glob.glob(os.path.join(BASE_DIR, '*.xlsx')):
         name = os.path.basename(path)
+        if name.startswith('~$'):
+            continue
         try:
             df = align_dataframe_columns(pd.read_excel(path, dtype={'PANEL_NO': str}))
+            df = normalize_excel_rows_by_case(df)
             # Some Excel files contain exactly two columns and omit PANEL_NO.
             # In that format, the second column is the PANEL_NO lookup column,
             # regardless of whether it is named SN, PNL, S1SN, or S2SN.
@@ -233,22 +282,24 @@ def load_all_excel_files():
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=columns)
 
 
-def find_sn_by_panel_df(panel, buffer, bsn):
+def find_sn_by_panel_df(panel, buffer, version):
+    """依 PANEL 找到 Excel 記錄，並依 PASS 版本號選擇對應的 SN。"""
     if buffer is None or buffer.empty or 'PANEL_NO' not in buffer: return pd.DataFrame()
     result = buffer[buffer['PANEL_NO'].astype(str).str.strip().str.upper() == str(panel).strip().upper()]
     rows = []
     for _, row in result.iterrows():
-        for column in ('序號(S1SN)', '序號(S2SN)'):
-            value = row.get(column)
-            if pd.notna(value) and str(value).strip():
-                item = row.copy(); item['序號(SN)'] = str(value).strip(); rows.append(item)
-        if not any(pd.notna(row.get(column)) and str(row.get(column)).strip() for column in ('序號(S1SN)', '序號(S2SN)')):
-            value = row.get('序號(SN)')
-            if pd.notna(value) and str(value).strip():
-                item = row.copy(); item['序號(SN)'] = str(value).strip(); rows.append(item)
-    try: index = int(str(bsn).strip())
-    except (TypeError, ValueError): return pd.DataFrame()
-    return pd.DataFrame(rows).iloc[[index - 1]].copy() if 0 < index <= len(rows) else pd.DataFrame()
+        value = row.get('序號(SN)')
+        if pd.notna(value) and str(value).strip():
+            item = row.copy()
+            item['序號(SN)'] = str(value).strip()
+            rows.append(item)
+            global actual_sn
+            actual_sn = str(value).strip()
+    try:
+        version_number = int(str(version).strip())
+    except (TypeError, ValueError):
+        return pd.DataFrame()
+    return pd.DataFrame(rows).iloc[[version_number - 1]].copy() if 0 < version_number <= len(rows) else pd.DataFrame()
 
 
 def upload_to_mysql(sn, file_dt, side, status, cfg, job, panel, file_name, model):
@@ -333,14 +384,14 @@ def scan_folder_loop():
                 try:
                     parts = file_name.split('_')
                     if len(parts) < 7: raise ValueError('檔名格式不符，至少需要 6 個欄位')
-                    panel, status, bsn = parts[2].strip(), parts[3].strip(), parts[4].strip()
+                    panel, status, version = parts[2].strip(), parts[3].strip(), parts[4].strip()
                     model, side = parts[5][:-1], parts[5][-1:].upper()
                     stamp = os.path.splitext(parts[6])[0].strip().upper()
                     #parts = raw_parts[:7]                    
                     try: file_dt = datetime.strptime(stamp, '%Y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S') if stamp and stamp != 'NONE' else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     except ValueError: file_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S'); log_and_display(f'時間格式錯誤: {file_name}', failure=True)
                     if status.upper() == 'FAIL': move_to_fail_folder(file_name, '狀態為 FAIL'); continue
-                    results = find_sn_by_panel_df(panel, data_buffer, bsn)
+                    results = find_sn_by_panel_df(panel, data_buffer, version)
                     if results.empty:
                         log_and_display(f'比對失敗：在 Excel 緩衝區中找不到 PANEL_NO [{panel}] 的任何資料，此檔案不上拋。', failure=True)
                         move_to_fail_folder(file_name, 'PANEL_NO 比對失敗'); continue
