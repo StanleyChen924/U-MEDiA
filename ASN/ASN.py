@@ -1,6 +1,5 @@
 import configparser
 from datetime import datetime
-import math
 import pathlib
 import re
 import tkinter as tk
@@ -10,9 +9,22 @@ import pandas as pd
 import pymysql
 from openpyxl import load_workbook
 
+import sys
 
-BASE_DIR = pathlib.Path(__file__).resolve().parent
+# 修正此處：判斷是 .py 執行還是 .exe 執行
+if getattr(sys, 'frozen', False):
+    # 點擊 EXE 時：改抓 sys.executable (即 EXE 檔案實際存放的目錄)
+    BASE_DIR = pathlib.Path(sys.executable).resolve().parent
+else:
+    # 執行原始碼 .py 時：維持原本的邏輯
+    BASE_DIR = pathlib.Path(__file__).resolve().parent
+
+# 您原本的程式碼不需要變動
 OUTPUT_DIR = BASE_DIR / "ASNFile"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# OUTPUT_DIR = BASE_DIR / "ASNFile"
+
 TEMPLATE_PATTERN = "*shipping list.xlsx"
 LAST_WORK_ORDER_FILE = BASE_DIR / "last_work_order.ini"
 
@@ -92,53 +104,79 @@ def find_template():
 def read_template_definition():
     template = find_template()
     if not template:
-        return DB_COLUMNS[:], DB_COLUMNS[:], []
+        return {}, []
 
     workbook = load_workbook(template, read_only=True, data_only=True)
-    sheet = workbook.active
-    rows = list(sheet.iter_rows(min_row=1, max_row=min(sheet.max_row, 30), values_only=True))
-    heading_row = None
-    model_col = None
-    for row_number, row in enumerate(rows, 1):
-        for col_number, value in enumerate(row, 1):
-            if normalise_heading(value) == "MODEL_NAME":
-                heading_row, model_col = row_number, col_number
-                break
-        if heading_row:
+    configurations = {}
+    choices = []
+    try:
+        for sheet in workbook.worksheets:
+            if normalise_heading(sheet.cell(1, 1).value) != "MODEL_NAME":
+                continue
+
+            headings = {
+                col: normalise_heading(sheet.cell(1, col).value)
+                for col in range(2, sheet.max_column + 1)
+                if sheet.cell(1, col).value not in (None, "")
+            }
+            if not any(heading in DB_COLUMNS for heading in headings.values()):
+                continue
+
+            for row in range(3, sheet.max_row + 1):
+                model_name = sheet.cell(row, 1).value
+                if model_name in (None, ""):
+                    continue
+
+                model_name = str(model_name).strip()
+                values = {}
+                required = set()
+                for col, heading in headings.items():
+                    if heading not in DB_COLUMNS:
+                        continue
+                    value = sheet.cell(row, col).value
+                    if isinstance(value, str) and value.strip().lower() == "v":
+                        required.add(heading)
+                    elif value not in (None, ""):
+                        values[heading] = value
+
+                configurations[model_name] = {
+                    "values": values,
+                    "required": required,
+                }
+                choices.append(model_name)
             break
 
-    if heading_row is None:
+        # Keep model selection available for older templates without a product
+        # configuration sheet.
+        if not configurations:
+            for sheet in workbook.worksheets:
+                heading_row = None
+                model_col = None
+                for row_number, row in enumerate(sheet.iter_rows(
+                    min_row=1,
+                    max_row=min(sheet.max_row, 30),
+                    values_only=True,
+                ), 1):
+                    for col_number, value in enumerate(row, 1):
+                        if normalise_heading(value) == "MODEL_NAME":
+                            heading_row = row_number
+                            model_col = col_number
+                            break
+                    if model_col:
+                        break
+                if not model_col:
+                    continue
+                for row in range(max(heading_row + 1, 3), sheet.max_row + 1):
+                    value = sheet.cell(row, model_col).value
+                    if value not in (None, "") and str(value).strip().lower() != "v":
+                        text = str(value).strip()
+                        if text not in choices:
+                            choices.append(text)
+                if choices:
+                    break
+    finally:
         workbook.close()
-        return DB_COLUMNS[:], DB_COLUMNS[:], []
-
-    headings = {}
-    for col in range(1, sheet.max_column + 1):
-        value = sheet.cell(heading_row, col).value
-        if value not in (None, ""):
-            headings[col] = normalise_heading(value)
-
-    selected = []
-    for col, heading in headings.items():
-        marked = any(
-            str(sheet.cell(row, col).value).strip().lower() == "v"
-            for row in range(1, min(heading_row + 3, sheet.max_row + 1))
-        )
-        if marked and heading in DB_COLUMNS and heading not in selected:
-            selected.append(heading)
-    if not selected:
-        selected = [heading for heading in headings.values() if heading in DB_COLUMNS]
-    if not selected:
-        selected = DB_COLUMNS[:]
-
-    choices = []
-    for row in range(max(heading_row + 1, 3), sheet.max_row + 1):
-        value = sheet.cell(row, model_col).value
-        if value not in (None, "") and str(value).strip().lower() != "v":
-            text = str(value).strip()
-            if text not in choices:
-                choices.append(text)
-    workbook.close()
-    return selected, selected, choices
+    return configurations, choices
 
 
 def execute_export():
@@ -154,10 +192,50 @@ def execute_export():
     input_dn_item = entry_cs_shipping_notice.get().strip()
     input_part_no = entry_product_part_no.get().strip()
     input_shipping_date = entry_shipping_date.get().strip()
+    input_carton_start = entry_carton_start.get().strip()
     start_pallet = entry_pallet.get().strip()
 
     if not work_order:
         messagebox.showwarning("警告", "請輸入工單號碼！")
+        return
+
+    model_config = model_configurations.get(model_name, {})
+    required = model_config.get("required", set())
+    input_values = {
+        "WORK_ORDER": work_order,
+        "QTY": total_qty_text,
+        "PO": input_po,
+        "COMPLETE_TIME": input_complete_time,
+        "RELATION_ORDER": input_relation_order,
+        "DN_ITEM": input_dn_item,
+        "PART_NO": input_part_no,
+        "Shipping_Date": input_shipping_date,
+        "CARTON_NO": input_carton_start,
+    }
+    missing_required = [
+        column
+        for column in required
+        if column not in {"MAC", "MFG_Date"}
+        and not (model_name if column == "MODEL_NAME" else input_values.get(column, ""))
+    ]
+    unsupported_required = [
+        column
+        for column in required
+        if column not in {"MODEL_NAME", "MFG_Date"} and column not in input_values
+    ]
+    if unsupported_required:
+        messagebox.showerror(
+            "範本設定錯誤",
+            "範本將下列欄位標記為必填，但程式沒有對應的輸入欄位："
+            + "、".join(sorted(unsupported_required)),
+        )
+        return
+    if missing_required:
+        messagebox.showwarning(
+            "必填欄位",
+            "請填寫 Excel 中標記為 v 的欄位："
+            + "、".join(sorted(missing_required)),
+        )
         return
 
     try:
@@ -195,10 +273,14 @@ def execute_export():
                     AND CARTON_NO IS NOT NULL
                     AND TRIM(CARTON_NO) <> ''"""
         params = [work_order]
+        if input_carton_start:
+            sql += " AND CARTON_NO >= %s"
+            params.append(input_carton_start)
         if model_name:
             sql += " AND MODEL_NAME = %s"
             params.append(model_name)
-        sql += " ORDER BY CARTON_NO ASC"
+        sql += " ORDER BY CARTON_NO ASC LIMIT %s"
+        params.append(total_qty)
 
         connection = pymysql.connect(**db_config, charset="utf8")
         df = pd.read_sql(sql, connection, params=tuple(params))
@@ -207,19 +289,12 @@ def execute_export():
             messagebox.showinfo("提示", "找不到符合條件且 CARTON_NO 有值的資料。")
             return
 
-        expected_cartons = math.ceil(total_qty / qty_per_carton)
-        if len(df) > expected_cartons:
-            #df = df.head(expected_cartons).copy()
-            df = df.head(total_qty).copy()
-        elif len(df) < expected_cartons:
+        if len(df) < total_qty:
             messagebox.showwarning(
                 "提醒",
-                f"資料庫查到的 CARTON 筆數不足，預計 {expected_cartons} 箱，已依實際資料筆數匯出。",
+                f"資料庫查到的筆數不足，預計 {total_qty} 筆，已依實際資料筆數匯出。",
             )
 
-        # QTY 代表本次所有出貨的總數量，不是單一 CARTON 的數量。
-        # 因此每一筆匯出資料的 QTY 都填入相同的出貨總數量。
-        df["QTY"] = total_qty
         overrides = {
             "PO": input_po,
             "COMPLETE_TIME": input_complete_time,
@@ -231,6 +306,30 @@ def execute_export():
         for column, value in overrides.items():
             if value:
                 df[column] = value
+        for column, value in model_config.get("values", {}).items():
+            if column not in overrides and column not in {
+                "CARTON_NO", "MAC", "MODEL_NAME", "QTY",
+            }:
+                df[column] = value
+        if "MFG_Date" in required and df["MFG_Date"].fillna("").astype(str).str.strip().eq("").any():
+            messagebox.showwarning(
+                "必填欄位",
+                "資料庫或範本設定中有資料缺少 MFG_Date，請確認資料後再匯出。",
+            )
+            return
+        database_has_mac = (
+            df["MAC"].notna()
+            & df["MAC"].astype(str).str.strip().ne("")
+        )
+        df["MAC"] = df["MAC"].where(database_has_mac, "")
+        if "MAC" in required and df["MAC"].astype(str).str.strip().eq("").any():
+            messagebox.showwarning(
+                "必填欄位",
+                "資料庫中有資料缺少 MAC，請確認資料後再匯出。",
+            )
+            return
+        if model_name:
+            df["MODEL_NAME"] = model_name
         
         # --- 修正後的棧板號碼計算邏輯 ---
         if start_pallet:
@@ -289,10 +388,10 @@ def input_row(label, default="", widget_type="entry", values=()):
     return widget
 
 
-selected_columns, _, model_choices = read_template_definition()
+model_configurations, model_choices = read_template_definition()
 root = tk.Tk()
 root.title("ASN Log 資料匯出工具")
-root.geometry("560x680")
+root.geometry("560x580")
 root.resizable(False, False)
 frame = ttk.Frame(root, padding="20")
 frame.pack(fill=tk.BOTH, expand=True)
@@ -300,26 +399,69 @@ tk.Label(frame, text="工單資料 Excel 匯出系統", font=("Microsoft JhengHe
 
 combo_model = input_row("ModelName：", widget_type="combo", values=model_choices)
 entry_wo = input_row("請輸入工單號碼：", load_last_work_order() or "WOTQ7553D")
-entry_total_qty = input_row("QTY 總數量：", "1")
+entry_total_qty = input_row("QTY 總數量（抓取筆數）：", "")
 entry_po = input_row("請輸入 PO 號碼：")
-entry_qty_per_carton = input_row("每箱數量：", "1")
-entry_cartons_per_pallet = input_row("每棧板箱數：", "2")
+entry_qty_per_carton = input_row("每箱數量：", "")
+entry_cartons_per_pallet = input_row("每棧板箱數：", "")
+entry_carton_start = input_row("CARTON_NO 起始值：")
 entry_complete_time = input_row("COMPLETE_TIME：")
 entry_relation_order = input_row("RELATION_ORDER：")
 entry_cs_shipping_notice = input_row("CS出貨通知：")
 entry_product_part_no = input_row("成品料號：")
 entry_shipping_date = input_row("Shipping_Date：")
-entry_pallet = input_row("PALLET_NO 起始值：", "PL001")
+entry_pallet = input_row("PALLET_NO 起始值：", "")
+
+field_entries = {
+    "WORK_ORDER": entry_wo,
+    "QTY": entry_total_qty,
+    "PO": entry_po,
+    "COMPLETE_TIME": entry_complete_time,
+    "RELATION_ORDER": entry_relation_order,
+    "DN_ITEM": entry_cs_shipping_notice,
+    "PART_NO": entry_product_part_no,
+    "Shipping_Date": entry_shipping_date,
+    "CARTON_NO": entry_carton_start,
+    "PALLET_NO": entry_pallet,
+}
+last_model_fields = set()
+
+
+def apply_model_configuration(event=None):
+    global last_model_fields
+    selected_model = event.widget.get().strip() if event else combo_model.get().strip()
+    configuration = model_configurations.get(selected_model, {})
+    values = configuration.get("values", {})
+    required = configuration.get("required", set())
+    fields_to_refresh = last_model_fields | set(values) | required
+
+    for column in fields_to_refresh:
+        widget = field_entries.get(column)
+        if widget:
+            widget.delete(0, tk.END)
+
+    for column, value in values.items():
+        widget = field_entries.get(column)
+        if widget:
+            widget.insert(0, str(value))
+
+    last_model_fields = set(values) | required
+
+
+combo_model.bind("<<ComboboxSelected>>", apply_model_configuration)
+if model_choices:
+    combo_model.current(0)
+    apply_model_configuration()
 
 label_status = tk.Label(frame, text="狀態：準備就緒", font=("Microsoft JhengHei", 9), fg="gray")
 label_status.pack(pady=5)
 ttk.Button(frame, text="開始查詢並匯出 Excel", command=execute_export).pack(fill=tk.X, ipady=5)
+ttk.Button(frame, text="關閉程式", command=root.destroy).pack(fill=tk.X, ipady=5, pady=(5, 0))
 
 entries = [
     combo_model, entry_wo, entry_total_qty, entry_po, entry_qty_per_carton,
-    entry_cartons_per_pallet, entry_complete_time, entry_relation_order,
-    entry_cs_shipping_notice, entry_product_part_no, entry_shipping_date,
-    entry_pallet,
+    entry_cartons_per_pallet, entry_carton_start, entry_complete_time,
+    entry_relation_order, entry_cs_shipping_notice, entry_product_part_no,
+    entry_shipping_date, entry_pallet,
 ]
 for current, next_widget in zip(entries, entries[1:]):
     current.bind("<Return>", lambda event, widget=next_widget: focus_next(widget))
