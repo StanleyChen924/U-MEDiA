@@ -390,7 +390,15 @@ def scan_folder_loop():
                     #parts = raw_parts[:7]                    
                     try: file_dt = datetime.strptime(stamp, '%Y%m%d%H%M%S').strftime('%Y-%m-%d %H:%M:%S') if stamp and stamp != 'NONE' else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     except ValueError: file_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S'); log_and_display(f'時間格式錯誤: {file_name}', failure=True)
-                    if status.upper() == 'FAIL': move_to_fail_folder(file_name, '狀態為 FAIL'); continue
+                    # if status.upper() == 'FAIL': move_to_fail_folder(file_name, '狀態為 FAIL'); continue
+                    # 將狀態統一轉大寫後，檢查是否在指定清單中
+                    current_status = status.upper()
+
+                    if current_status in ['FAIL', 'SKIP']:
+                        # 動態帶入當前的狀態作為原因（例如：'狀態為 FAIL' 或 '狀態為 SKIP'）
+                        move_to_fail_folder(file_name, f'狀態為 {current_status}')
+                        continue
+
                     results = find_sn_by_panel_df(panel, data_buffer, version)
                     if results.empty:
                         log_and_display(f'比對失敗：在 Excel 緩衝區中找不到 PANEL_NO [{panel}] 的任何資料，此檔案不上拋。', failure=True)
